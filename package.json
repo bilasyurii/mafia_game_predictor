@@ -1,0 +1,18 @@
+{
+  "name": "mafia_game_predictor",
+  "version": "1.0.0",
+  "description": "Probabilistic predictor for Mafia board game",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Yurii Bilas",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
