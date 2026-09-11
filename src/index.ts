@@ -3,14 +3,21 @@ import { generateWorlds } from "./generateWorlds";
 import { getProbability } from "./probability";
 
 const game: GameConfig = {
-  players: ["oleg", "anton", "yura", "katya"],
-  roles: ["mafia", "mafia", "doctor", "commissioner"],
+  players: ["1", "2", "3", "4", "5", "6", "7", "8"],
+  roles: [
+    "mafia",
+    "mafia",
+    "doctor",
+    "detective",
+    "citizen",
+    "citizen",
+    "citizen",
+    "citizen",
+  ],
 };
 
 const worlds = generateWorlds(game);
 
 console.log(worlds.length);
-// 12
 
-console.log(getProbability(worlds, "oleg", "mafia"));
-// 0.5
+console.log(getProbability(worlds, "1", "mafia"));

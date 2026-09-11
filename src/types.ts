@@ -1,4 +1,4 @@
-export type RoleId = "mafia" | "citizen" | "doctor" | "commissioner";
+export type RoleId = "mafia" | "citizen" | "doctor" | "detective";
 
 export type PlayerId = string;
 
