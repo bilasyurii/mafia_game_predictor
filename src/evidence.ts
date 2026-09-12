@@ -1,0 +1,90 @@
+import { AliveState, GameConfig, Observation, World } from "./types";
+import { RoleRegistry } from "./roles";
+import { GroupRegistry } from "./roleGroups";
+import { NightResultFact } from "./night";
+
+/**
+ * Everything a likelihood computation might need beyond the observation and
+ * the candidate world themselves: game rules, role mechanics, role groups,
+ * who's alive, and the history of prior observations (for
+ * contextual/sequential evidence - e.g. weighing a defend differently if
+ * it echoes an earlier investigationReport).
+ */
+export interface EvidenceContext {
+  config: GameConfig;
+  roles: RoleRegistry;
+  groups: GroupRegistry;
+  alive: AliveState;
+  history: Observation[];
+}
+
+/**
+ * Anything the public observer can learn and use as Bayesian evidence:
+ * either a player-produced statement/behavior (Observation), or a
+ * publicly-announced night outcome (NightResultFact). Both are scored the
+ * same way - see LikelihoodModel.
+ */
+export type Evidence = Observation | NightResultFact;
+
+/**
+ * The ONLY place RoleRegistry and Evidence are allowed to meet.
+ * Answers: how probable is it that `evidence` would have arisen, if
+ * `world` were the true role assignment?
+ */
+export interface LikelihoodModel {
+  likelihood(evidence: Evidence, world: World, ctx: EvidenceContext): number;
+}
+
+/** A handler for one specific Observation subtype. */
+export type ObservationHandler<O extends Observation = Observation> = (
+  observation: O,
+  world: World,
+  ctx: EvidenceContext
+) => number;
+
+/** One handler per Observation["type"], nothing more, nothing less. */
+export type ObservationHandlerMap = {
+  [T in Observation["type"]]: ObservationHandler<
+    Extract<Observation, { type: T }>
+  >;
+};
+
+/**
+ * A NightResultFact's likelihood is not a simple per-type table lookup like
+ * the Observation handlers above - it requires marginalizing over hidden
+ * night actions via resolveNight() + an ActionModel. Kept as its own
+ * handler shape rather than forced into ObservationHandlerMap.
+ */
+export type NightResultHandler = (
+  fact: NightResultFact,
+  world: World,
+  ctx: EvidenceContext
+) => number;
+
+/**
+ * Builds a LikelihoodModel that dispatches on evidence.type: player
+ * statements/behavior go to `handlers`, a night outcome goes to
+ * `nightResultHandler`. This function - and updateProbabilities(), which
+ * calls it - never branches on a role name or evidence type beyond this
+ * dispatch. Only the injected handlers may consult RoleRegistry, and only
+ * ever generically (e.g. hasMechanic(ctx.roles, role, "checkIsMafia")),
+ * never via a literal comparison like role === "commissioner".
+ */
+export function createLikelihoodModel(
+  handlers: ObservationHandlerMap,
+  nightResultHandler: NightResultHandler = () => {
+    throw new Error(
+      "nightResult likelihood not implemented yet - requires a calibrated ActionModel"
+    );
+  }
+): LikelihoodModel {
+  return {
+    likelihood(evidence, world, ctx) {
+      if (evidence.type === "nightResult") {
+        return nightResultHandler(evidence, world, ctx);
+      }
+      const handler = handlers[evidence.type] as ObservationHandler;
+      return handler(evidence, world, ctx);
+    },
+  };
+}
