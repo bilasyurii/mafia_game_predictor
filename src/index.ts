@@ -1,6 +1,6 @@
-import { GameConfig } from "./types";
+import { GameConfig, RoleExpression } from "./types";
 import { generateWorlds } from "./generateWorlds";
-import { getProbability } from "./probability";
+import { getExpressionProbability, getProbability } from "./probability";
 import { updateProbabilities } from "./updateProbabilities";
 import { initAliveState } from "./facts";
 import { formatProbability } from "./format";
@@ -42,10 +42,11 @@ const ctx: EvidenceContext = {
 };
 
 // Placeholder parameters only - not derived from any real game data, just
-// illustrative numbers to exercise the selfRoleClaim handler end to end.
-// Every other observation type is still an uncalibrated stub.
+// illustrative numbers to exercise the selfRoleClaim and roleAssertion
+// handlers end to end. Every other observation type is still an
+// uncalibrated stub.
 const model = createLikelihoodModel(
-  createHandlers({ truthful: 0.9, false: 0.1 })
+  createHandlers({ truthful: 0.9, false: 0.1 }, { truthful: 0.8, false: 0.2 })
 );
 
 console.log(
@@ -57,6 +58,7 @@ const afterClaim = updateProbabilities(
   worlds,
   {
     type: "selfRoleClaim",
+    round: 0,
     actor: "1",
     claim: { kind: "role", role: "commissioner" },
   },
@@ -67,4 +69,27 @@ const afterClaim = updateProbabilities(
 console.log(
   "P(1 = commissioner) after '1' claims commissioner:",
   formatProbability(getProbability(afterClaim, "1", "commissioner"))
+);
+
+const mafiaGroup: RoleExpression = { kind: "group", group: "mafia" };
+
+console.log(
+  "P(5 is Mafia) before assertion:",
+  formatProbability(
+    getExpressionProbability(afterClaim, "5", mafiaGroup, ctx.groups)
+  )
+);
+
+const afterAssertion = updateProbabilities(
+  afterClaim,
+  { type: "roleAssertion", round: 0, actor: "1", target: "5", claim: mafiaGroup },
+  model,
+  ctx
+);
+
+console.log(
+  "P(5 is Mafia) after '1' asserts '5 is Mafia':",
+  formatProbability(
+    getExpressionProbability(afterAssertion, "5", mafiaGroup, ctx.groups)
+  )
 );

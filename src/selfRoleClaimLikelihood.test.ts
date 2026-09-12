@@ -57,7 +57,7 @@ const world: World = {
 test("handler returns the configured truthful value when the claim matches", () => {
   const handler = createSelfRoleClaimHandler({ truthful: 0.7, false: 0.2 });
   const result = handler(
-    { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+    { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
     world,
     makeCtx()
   );
@@ -67,7 +67,7 @@ test("handler returns the configured truthful value when the claim matches", () 
 test("handler returns the configured false value when the claim does not match", () => {
   const handler = createSelfRoleClaimHandler({ truthful: 0.7, false: 0.2 });
   const result = handler(
-    { type: "selfRoleClaim", actor: "1", claim: exactRole("doctor") },
+    { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("doctor") },
     world,
     makeCtx()
   );
@@ -82,7 +82,7 @@ function posteriorFor(truthful: number, falseValue: number): number {
   );
   const posteriorWorlds = updateProbabilities(
     worlds,
-    { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+    { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
     model,
     ctx
   );
@@ -112,7 +112,13 @@ test("createHandlers only replaces selfRoleClaim - other types stay uncalibrated
   );
   assert.throws(() => {
     model.likelihood(
-      { type: "vote", actor: "1", target: "2" },
+      {
+        type: "candidateVote",
+        round: 1,
+        stage: "initial",
+        candidates: ["2"],
+        handsRaised: { "2": ["1"] },
+      },
       world,
       makeCtx()
     );
@@ -128,7 +134,7 @@ test("a truthful function can inspect observation.actor", () => {
   });
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
       world,
       makeCtx()
     ),
@@ -136,7 +142,7 @@ test("a truthful function can inspect observation.actor", () => {
   );
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "2", claim: exactRole("don") },
+      { type: "selfRoleClaim", round: 1, actor: "2", claim: exactRole("don") },
       world,
       makeCtx()
     ),
@@ -155,7 +161,7 @@ test("a truthful function can inspect observation.claim", () => {
   });
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
       world,
       makeCtx()
     ),
@@ -163,7 +169,7 @@ test("a truthful function can inspect observation.claim", () => {
   );
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "2", claim: exactRole("don") },
+      { type: "selfRoleClaim", round: 1, actor: "2", claim: exactRole("don") },
       world,
       makeCtx()
     ),
@@ -180,7 +186,7 @@ test("a false function can inspect world.roles[observation.actor]", () => {
   // actor "3" is actually mafia, falsely claims citizen
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "3", claim: exactRole("citizen") },
+      { type: "selfRoleClaim", round: 1, actor: "3", claim: exactRole("citizen") },
       world,
       makeCtx()
     ),
@@ -189,7 +195,7 @@ test("a false function can inspect world.roles[observation.actor]", () => {
   // actor "5" is actually citizen, falsely claims doctor
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "5", claim: exactRole("doctor") },
+      { type: "selfRoleClaim", round: 1, actor: "5", claim: exactRole("doctor") },
       world,
       makeCtx()
     ),
@@ -206,12 +212,20 @@ test("a function can inspect ctx.history", () => {
   const emptyHistoryCtx = makeCtx();
   const withHistoryCtx: EvidenceContext = {
     ...makeCtx(),
-    history: [{ type: "vote", actor: "2", target: "3" }],
+    history: [
+      {
+        type: "candidateVote",
+        round: 1,
+        stage: "initial",
+        candidates: ["3"],
+        handsRaised: { "3": ["2"] },
+      },
+    ],
   };
 
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
       world,
       emptyHistoryCtx
     ),
@@ -219,7 +233,7 @@ test("a function can inspect ctx.history", () => {
   );
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
       world,
       withHistoryCtx
     ),
@@ -238,7 +252,7 @@ test("a function-based likelihood is actually used by the Bayesian pipeline", ()
   );
   const posteriorWorlds = updateProbabilities(
     worlds,
-    { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+    { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
     model,
     ctx
   );
@@ -254,7 +268,7 @@ test("exact Commissioner claim: only the commissioner-holding world is truthful"
   const handler = createSelfRoleClaimHandler({ truthful: 0.9, false: 0.1 });
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "1", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "1", claim: exactRole("commissioner") },
       world,
       makeCtx()
     ),
@@ -262,7 +276,7 @@ test("exact Commissioner claim: only the commissioner-holding world is truthful"
   );
   assert.equal(
     handler(
-      { type: "selfRoleClaim", actor: "2", claim: exactRole("commissioner") },
+      { type: "selfRoleClaim", round: 1, actor: "2", claim: exactRole("commissioner") },
       world,
       makeCtx()
     ),
@@ -275,15 +289,15 @@ test("Mafia group claim matches both Don and ordinary Mafia", () => {
   const mafiaClaim: RoleExpression = { kind: "group", group: "mafia" };
 
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "2", claim: mafiaClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "2", claim: mafiaClaim }, world, makeCtx()),
     0.9 // "2" is don
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "3", claim: mafiaClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "3", claim: mafiaClaim }, world, makeCtx()),
     0.9 // "3" is ordinary mafia
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "1", claim: mafiaClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "1", claim: mafiaClaim }, world, makeCtx()),
     0.1 // "1" is commissioner, not mafia
   );
 });
@@ -293,19 +307,19 @@ test("Town group claim matches Citizen/Doctor/Commissioner", () => {
   const townClaim: RoleExpression = { kind: "group", group: "town" };
 
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "5", claim: townClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "5", claim: townClaim }, world, makeCtx()),
     0.9 // citizen
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "4", claim: townClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "4", claim: townClaim }, world, makeCtx()),
     0.9 // doctor
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "1", claim: townClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "1", claim: townClaim }, world, makeCtx()),
     0.9 // commissioner
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "2", claim: townClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "2", claim: townClaim }, world, makeCtx()),
     0.1 // don
   );
 });
@@ -315,15 +329,15 @@ test("Active Town claim matches Doctor/Commissioner but not Citizen", () => {
   const activeTownClaim: RoleExpression = { kind: "group", group: "activeTown" };
 
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "4", claim: activeTownClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "4", claim: activeTownClaim }, world, makeCtx()),
     0.9 // doctor
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "1", claim: activeTownClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "1", claim: activeTownClaim }, world, makeCtx()),
     0.9 // commissioner
   );
   assert.equal(
-    handler({ type: "selfRoleClaim", actor: "5", claim: activeTownClaim }, world, makeCtx()),
+    handler({ type: "selfRoleClaim", round: 1, actor: "5", claim: activeTownClaim }, world, makeCtx()),
     0.1 // citizen - not active town
   );
 });

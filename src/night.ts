@@ -1,5 +1,6 @@
 import { AliveState, PlayerId, World } from "./types";
 import { hasMechanic, RoleRegistry } from "./roles";
+import { getInvestigationResult } from "./investigation";
 
 /**
  * One night's private latent actions - a hypothesis, not yet known to be
@@ -35,9 +36,9 @@ export interface NightHistoryContext {
 export interface NightResolution {
   mafiaKillSucceeded: boolean;
   mafiaKillTarget?: PlayerId;
-  /** true = the checked target's role has the checkIsMafia mechanic. */
+  /** getInvestigationResult("checkIsCommissioner", target's role). */
   donCheckResult?: boolean;
-  /** true = the checked target's role has the unanimousNightKill mechanic. */
+  /** getInvestigationResult("checkIsMafia", target's role). */
   commissionerCheckResult?: boolean;
   commissionerCausedDeath?: PlayerId;
   doctorSavedTarget?: PlayerId;
@@ -95,21 +96,21 @@ export function resolveNight(
     }
   }
 
-  // --- Don check: "is target the role that can check-is-mafia" ---
+  // --- Don check (checkIsCommissioner) ---
   const donAlive = players.some(
     (p) =>
       isAlive(p) && hasMechanic(registry, world.roles[p], "checkIsCommissioner")
   );
   let donCheckResult: boolean | undefined;
   if (donAlive && actions.donCheckTarget !== undefined) {
-    donCheckResult = hasMechanic(
+    donCheckResult = getInvestigationResult(
       registry,
-      world.roles[actions.donCheckTarget],
-      "checkIsMafia"
+      "checkIsCommissioner",
+      world.roles[actions.donCheckTarget]
     );
   }
 
-  // --- Commissioner check: "is target on the unanimous-kill team" ---
+  // --- Commissioner check (checkIsMafia) ---
   const commissionerAlive = players.some(
     (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
   );
@@ -117,10 +118,10 @@ export function resolveNight(
   let commissionerCausedDeath: PlayerId | undefined;
   if (commissionerAlive && actions.commissionerCheckTarget !== undefined) {
     const target = actions.commissionerCheckTarget;
-    commissionerCheckResult = hasMechanic(
+    commissionerCheckResult = getInvestigationResult(
       registry,
-      world.roles[target],
-      "unanimousNightKill"
+      "checkIsMafia",
+      world.roles[target]
     );
     if (commissionerCheckResult && target !== doctorSavedTarget) {
       commissionerCausedDeath = target;

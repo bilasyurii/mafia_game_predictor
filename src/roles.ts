@@ -41,7 +41,8 @@ export type RoleRegistry = Record<RoleId, RoleDefinition>;
 
 /**
  * Public speech/behavior (selfRoleClaim, roleAssertion, investigationReport,
- * vote, suspect, defend, nominate) is deliberately absent from every role's
+ * candidateVote, keepOrEliminateVote, suspect, defend, nominate) is
+ * deliberately absent from every role's
  * mechanics list - any player, regardless of role, can say or do any of
  * these.
  */

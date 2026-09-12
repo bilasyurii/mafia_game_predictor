@@ -1,10 +1,15 @@
 import { ObservationHandlerMap } from "./evidence";
 import { hasMechanic } from "./roles";
 import { satisfiedBy } from "./roleGroups";
+import { getInvestigationResult } from "./investigation";
 import {
   createSelfRoleClaimHandler,
   SelfRoleClaimLikelihoodParams,
 } from "./selfRoleClaimLikelihood";
+import {
+  createRoleAssertionHandler,
+  RoleAssertionLikelihoodParams,
+} from "./roleAssertionLikelihood";
 
 /**
  * Reference implementation of ObservationHandlerMap - the conceptual shape
@@ -42,78 +47,93 @@ export const uncalibratedHandlers: ObservationHandlerMap = {
   },
 
   /**
-   * roleAssertion: "A: B is <role>".
+   * roleAssertion: "A: B is <role or group>".
    *
-   * Depends on world.roles[actor] AND world.roles[target] AND whether the
-   * claim matches world.roles[target] - a mafia player accusing a fellow
-   * mafia member is a structurally different situation from a citizen
-   * making the same accusation, even though both are "an assertion about
-   * someone else". The eventual model keys off the (actorRole, targetRole,
-   * correctness) tuple, not off any specific role name.
+   * Depends on world.roles[actor] AND world.roles[target] AND whether
+   * world.roles[target] satisfies the claimed expression - a mafia player
+   * accusing a fellow mafia member is a structurally different situation
+   * from a citizen making the same accusation, even though both are "an
+   * assertion about someone else". The eventual model keys off the
+   * (actorRole, targetRole, correctness) tuple, not off any specific role
+   * name.
    */
-  roleAssertion(observation, world, _ctx) {
+  roleAssertion(observation, world, ctx) {
     const actorRole = world.roles[observation.actor];
-    const targetRole = world.roles[observation.target];
-    const isCorrect = targetRole === observation.role;
+    const isCorrect = satisfiedBy(
+      observation.claim,
+      world.roles[observation.target],
+      ctx.groups
+    );
     throw new Error(
       `roleAssertion likelihood not calibrated yet (actorRole=${actorRole}, isCorrect=${isCorrect})`
     );
   },
 
   /**
-   * investigationReport: "A: I investigated B, result <role>".
+   * investigationReport: "A: I used <mechanic> on B, result YES/NO".
    *
-   * The key question is generic: does world.roles[actor] have EITHER
-   * investigative mechanic ("checkIsCommissioner" - Don's, or
-   * "checkIsMafia" - Commissioner's) *in this candidate world*? Two
-   * branches:
-   *  - true: the report could be a real result. Then compare the claimed
-   *    role to world.roles[target] - matching implies a genuine, correct
-   *    report; not matching implies either a deliberately false report or
-   *    an imperfect investigation mechanic. Note a real check only ever
-   *    yields a yes/no about a specific mechanic, never an exact role -
-   *    a report naming a specific role is itself already a claim beyond
-   *    what the mechanic could produce, a nuance the eventual model needs
-   *    to account for.
-   *  - false: actor's role in this world cannot produce a real
-   *    investigation, so this observation can only be a bluff - collapsing
-   *    to roughly the same likelihood shape as a plain roleAssertion.
-   * Note the same raw observation, scored against two different worlds
-   * (one where actor has a mechanic, one where they don't), naturally
-   * takes two different code paths here - nothing is hardcoded to
-   * "commissioner" or "don".
+   * Two deterministic facts are available per candidate world, neither of
+   * which names a role:
+   *  - canPerform: does world.roles[actor] hold observation.mechanic?
+   *  - matchesActual: does observation.result equal what the check would
+   *    really return against world.roles[target] (getInvestigationResult,
+   *    the same rule resolveNight uses)?
+   * Neither is a hard constraint on its own. Anyone may publicly claim a
+   * check, so a world where actor can't perform it is not impossible - the
+   * report is simply not a genuine result there. How likely a bluff, a lie
+   * about a real result, or a truthful report is remains behavioral and
+   * uncalibrated, so no likelihood (including 0) is returned yet.
    */
   investigationReport(observation, world, ctx) {
-    const actorRole = world.roles[observation.actor];
-    const canInvestigate =
-      hasMechanic(ctx.roles, actorRole, "checkIsCommissioner") ||
-      hasMechanic(ctx.roles, actorRole, "checkIsMafia");
-    const isCorrect = world.roles[observation.target] === observation.role;
+    const canPerform = hasMechanic(
+      ctx.roles,
+      world.roles[observation.actor],
+      observation.mechanic
+    );
+    const matchesActual =
+      getInvestigationResult(
+        ctx.roles,
+        observation.mechanic,
+        world.roles[observation.target]
+      ) === observation.result;
     throw new Error(
-      `investigationReport likelihood not calibrated yet (canInvestigate=${canInvestigate}, isCorrect=${isCorrect})`
+      `investigationReport likelihood not calibrated yet (canPerform=${canPerform}, matchesActual=${matchesActual})`
     );
   },
 
   /**
-   * vote / suspect: public behavioral signals.
+   * candidateVote / keepOrEliminateVote: one whole public voting round.
    *
-   * Conceptually similar - both are lightweight, non-mechanical, public
-   * acts available to anyone. A future model would consult whether actor
-   * and target are on the same team *in this world*
-   * (ctx.roles[world.roles[actor]].team vs ...target...team) as a proxy
-   * for "would this role want to vote/suspect this target", plus
-   * ctx.history for pattern-based signals (e.g. repeated suspicion of the
-   * same target carrying diminishing marginal evidence). Still no literal
-   * role-name branching - only team/mechanic lookups through the registry.
+   * Scored as a single event, since every living player's choice is part of
+   * the same observation (including abstentions, which only exist relative
+   * to everyone else's hands). A future model may factor it per voter
+   * against the candidate world's roles, but how any role tends to vote is
+   * behavioral and uncalibrated. The deterministic rules - validation,
+   * abstention, counting, outcome - live in voting.ts; they need the alive
+   * state at the time of the vote, which ctx.alive is not guaranteed to be.
    */
-  vote(observation, world, ctx) {
-    const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-    const targetTeam = ctx.roles[world.roles[observation.target]].team;
+  candidateVote(observation) {
     throw new Error(
-      `vote likelihood not calibrated yet (actorTeam=${actorTeam}, targetTeam=${targetTeam})`
+      `candidateVote likelihood not calibrated yet (round=${observation.round}, stage=${observation.stage})`
     );
   },
 
+  keepOrEliminateVote(observation) {
+    throw new Error(
+      `keepOrEliminateVote likelihood not calibrated yet (round=${observation.round})`
+    );
+  },
+
+  /**
+   * suspect: a public behavioral signal - a lightweight, non-mechanical act
+   * available to anyone. A future model would consult whether actor and
+   * target are on the same team *in this world*
+   * (ctx.roles[world.roles[actor]].team vs ...target...team) as a proxy for
+   * "would this role want to suspect this target", plus ctx.history for
+   * pattern-based signals (e.g. repeated suspicion of the same target
+   * carrying diminishing marginal evidence). Still no literal role-name
+   * branching - only team/mechanic lookups through the registry.
+   */
   suspect(observation, world, ctx) {
     const actorTeam = ctx.roles[world.roles[observation.actor]].team;
     const targetTeam = ctx.roles[world.roles[observation.target]].team;
@@ -145,7 +165,7 @@ export const uncalibratedHandlers: ObservationHandlerMap = {
   /**
    * nominate: "A nominated B for the elimination vote".
    *
-   * Same shape/reasoning as vote/suspect - a lightweight public act,
+   * Same shape/reasoning as suspect - a lightweight public act,
    * available to anyone, whose eventual likelihood would consult team
    * alignment in this world plus context (e.g. ctx.history for whether
    * this nomination follows a suspicious pattern).
@@ -161,14 +181,19 @@ export const uncalibratedHandlers: ObservationHandlerMap = {
 
 /**
  * All handlers, with `selfRoleClaim` replaced by the real, configurable
- * implementation from selfRoleClaimLikelihood.ts. Every other type stays
- * an uncalibrated stub - this step covers selfRoleClaim only.
+ * implementation from selfRoleClaimLikelihood.ts, and `roleAssertion`
+ * likewise replaced when `roleAssertionParams` is given. Every other type
+ * stays an uncalibrated stub.
  */
 export function createHandlers(
-  selfRoleClaimParams: SelfRoleClaimLikelihoodParams
+  selfRoleClaimParams: SelfRoleClaimLikelihoodParams,
+  roleAssertionParams?: RoleAssertionLikelihoodParams
 ): ObservationHandlerMap {
   return {
     ...uncalibratedHandlers,
     selfRoleClaim: createSelfRoleClaimHandler(selfRoleClaimParams),
+    ...(roleAssertionParams && {
+      roleAssertion: createRoleAssertionHandler(roleAssertionParams),
+    }),
   };
 }

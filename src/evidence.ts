@@ -2,11 +2,12 @@ import { AliveState, GameConfig, Observation, World } from "./types";
 import { RoleRegistry } from "./roles";
 import { GroupRegistry } from "./roleGroups";
 import { NightResultFact } from "./night";
+import type { DayEliminationFact } from "./facts";
 
 /**
  * Everything a likelihood computation might need beyond the observation and
  * the candidate world themselves: game rules, role mechanics, role groups,
- * who's alive, and the history of prior observations (for
+ * who's alive, and the history of prior public evidence (for
  * contextual/sequential evidence - e.g. weighing a defend differently if
  * it echoes an earlier investigationReport).
  */
@@ -15,16 +16,22 @@ export interface EvidenceContext {
   roles: RoleRegistry;
   groups: GroupRegistry;
   alive: AliveState;
-  history: Observation[];
+  /**
+   * Every public evidence item recorded before the one being scored, in
+   * recorded order - observations and public facts alike. For history[i]
+   * this should be exactly getHistoryBefore(history, i), so a handler can
+   * never see anything that happened later.
+   */
+  history: Evidence[];
 }
 
 /**
  * Anything the public observer can learn and use as Bayesian evidence:
- * either a player-produced statement/behavior (Observation), or a
- * publicly-announced night outcome (NightResultFact). Both are scored the
- * same way - see LikelihoodModel.
+ * a player-produced statement/behavior (Observation), a publicly-announced
+ * night outcome (NightResultFact), or a publicly-announced day elimination
+ * (DayEliminationFact). All are scored the same way - see LikelihoodModel.
  */
-export type Evidence = Observation | NightResultFact;
+export type Evidence = Observation | NightResultFact | DayEliminationFact;
 
 /**
  * The ONLY place RoleRegistry and Evidence are allowed to meet.
@@ -64,7 +71,7 @@ export type NightResultHandler = (
 /**
  * Builds a LikelihoodModel that dispatches on evidence.type: player
  * statements/behavior go to `handlers`, a night outcome goes to
- * `nightResultHandler`. This function - and updateProbabilities(), which
+ * `nightResultHandler`, and a day elimination is not scored yet. This function - and updateProbabilities(), which
  * calls it - never branches on a role name or evidence type beyond this
  * dispatch. Only the injected handlers may consult RoleRegistry, and only
  * ever generically (e.g. hasMechanic(ctx.roles, role, "checkIsMafia")),
@@ -82,6 +89,11 @@ export function createLikelihoodModel(
     likelihood(evidence, world, ctx) {
       if (evidence.type === "nightResult") {
         return nightResultHandler(evidence, world, ctx);
+      }
+      if (evidence.type === "dayElimination") {
+        throw new Error(
+          `dayElimination likelihood not implemented yet (round=${evidence.round})`
+        );
       }
       const handler = handlers[evidence.type] as ObservationHandler;
       return handler(evidence, world, ctx);
