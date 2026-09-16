@@ -10,6 +10,23 @@ import {
   createRoleAssertionHandler,
   RoleAssertionLikelihoodParams,
 } from "./roleAssertionLikelihood";
+import {
+  createInvestigationReportHandler,
+  InvestigationReportLikelihoodParams,
+} from "./investigationReportLikelihood";
+import {
+  createTeamAlignmentHandler,
+  TeamAlignmentLikelihoodParams,
+} from "./teamAlignmentLikelihood";
+import {
+  createCandidateVoteHandler,
+  CandidateVoteLikelihoodParams,
+} from "./candidateVoteLikelihood";
+import {
+  createKeepOrEliminateVoteHandler,
+  KeepOrEliminateVoteLikelihoodParams,
+} from "./keepOrEliminateVoteLikelihood";
+import { DefendAction, NominateAction, SuspectAction } from "./types";
 
 /**
  * Reference implementation of ObservationHandlerMap - the conceptual shape
@@ -181,19 +198,48 @@ export const uncalibratedHandlers: ObservationHandlerMap = {
 
 /**
  * All handlers, with `selfRoleClaim` replaced by the real, configurable
- * implementation from selfRoleClaimLikelihood.ts, and `roleAssertion`
- * likewise replaced when `roleAssertionParams` is given. Every other type
- * stays an uncalibrated stub.
+ * implementation from selfRoleClaimLikelihood.ts, and `roleAssertion` /
+ * `investigationReport` / `suspect` / `defend` / `nominate` /
+ * `candidateVote` / `keepOrEliminateVote` likewise replaced when their
+ * params are given. Every other type stays an uncalibrated stub.
  */
 export function createHandlers(
   selfRoleClaimParams: SelfRoleClaimLikelihoodParams,
-  roleAssertionParams?: RoleAssertionLikelihoodParams
+  roleAssertionParams?: RoleAssertionLikelihoodParams,
+  investigationReportParams?: InvestigationReportLikelihoodParams,
+  suspectParams?: TeamAlignmentLikelihoodParams<SuspectAction>,
+  defendParams?: TeamAlignmentLikelihoodParams<DefendAction>,
+  nominateParams?: TeamAlignmentLikelihoodParams<NominateAction>,
+  candidateVoteParams?: CandidateVoteLikelihoodParams,
+  keepOrEliminateVoteParams?: KeepOrEliminateVoteLikelihoodParams
 ): ObservationHandlerMap {
   return {
     ...uncalibratedHandlers,
     selfRoleClaim: createSelfRoleClaimHandler(selfRoleClaimParams),
     ...(roleAssertionParams && {
       roleAssertion: createRoleAssertionHandler(roleAssertionParams),
+    }),
+    ...(investigationReportParams && {
+      investigationReport: createInvestigationReportHandler(
+        investigationReportParams
+      ),
+    }),
+    ...(suspectParams && {
+      suspect: createTeamAlignmentHandler(suspectParams),
+    }),
+    ...(defendParams && {
+      defend: createTeamAlignmentHandler(defendParams),
+    }),
+    ...(nominateParams && {
+      nominate: createTeamAlignmentHandler(nominateParams),
+    }),
+    ...(candidateVoteParams && {
+      candidateVote: createCandidateVoteHandler(candidateVoteParams),
+    }),
+    ...(keepOrEliminateVoteParams && {
+      keepOrEliminateVote: createKeepOrEliminateVoteHandler(
+        keepOrEliminateVoteParams
+      ),
     }),
   };
 }

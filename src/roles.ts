@@ -111,6 +111,14 @@ export function hasMechanic(
   return registry[role].mechanics.some((m) => m.mechanic === mechanic);
 }
 
+/**
+ * The one generic team-based question the evidence layer is allowed to ask
+ * about two roles: are they on the same team - never which team by name.
+ */
+export function sameTeam(registry: RoleRegistry, a: RoleId, b: RoleId): boolean {
+  return registry[a].team === registry[b].team;
+}
+
 export function validateGameConfig(
   config: GameConfig,
   registry: RoleRegistry
