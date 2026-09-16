@@ -152,6 +152,80 @@ export function resolveNight(
 }
 
 /**
+ * Every mechanically valid hidden-night-action combination for a candidate
+ * world: each living kill-mechanic holder independently targets any living
+ * player, and each of Don's check / Commissioner's check / Doctor's save is
+ * included - ranging over any living player - only if its mechanic's
+ * holder is alive in this world, exactly mirroring resolveNight's own
+ * alive/mechanic checks. No behavioral logic: self-targeting is included
+ * for every mechanic (nothing here says who would plausibly be chosen,
+ * only who legally could be), and the doctor's cross-night "no repeat"
+ * rule is deliberately NOT enforced - the previous night's real save
+ * target is itself a hidden, marginalized-out quantity by the time a
+ * later night is being enumerated, so there is no fact to enforce it
+ * against. This is a documented v1 simplification, not an oversight; see
+ * nightResultLikelihood.ts, which always resolves every hypothesis this
+ * function produces against an empty NightHistoryContext.
+ */
+export function enumerateHiddenNightActions(
+  world: World,
+  alive: AliveState,
+  registry: RoleRegistry
+): HiddenNightActions[] {
+  const players = Object.keys(world.roles);
+  const isAlive = (p: PlayerId) => alive[p] === true;
+  const livingPlayers = players.filter(isAlive);
+
+  const killers = players.filter(
+    (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
+  );
+  const donAlive = players.some(
+    (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "checkIsCommissioner")
+  );
+  const commissionerAlive = players.some(
+    (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
+  );
+  const doctorAlive = players.some(
+    (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "protect")
+  );
+
+  let hypotheses: HiddenNightActions[] = [{ mafiaTargetChoices: {} }];
+
+  killers.forEach((killer) => {
+    const next: HiddenNightActions[] = [];
+    hypotheses.forEach((h) => {
+      livingPlayers.forEach((target) => {
+        next.push({
+          ...h,
+          mafiaTargetChoices: { ...h.mafiaTargetChoices, [killer]: target },
+        });
+      });
+    });
+    hypotheses = next;
+  });
+
+  function fanOutTarget(
+    include: boolean,
+    key: "donCheckTarget" | "commissionerCheckTarget" | "doctorSaveTarget"
+  ): void {
+    if (!include) return;
+    const next: HiddenNightActions[] = [];
+    hypotheses.forEach((h) => {
+      livingPlayers.forEach((target) => {
+        next.push({ ...h, [key]: target });
+      });
+    });
+    hypotheses = next;
+  }
+
+  fanOutTarget(donAlive, "donCheckTarget");
+  fanOutTarget(commissionerAlive, "commissionerCheckTarget");
+  fanOutTarget(doctorAlive, "doctorSaveTarget");
+
+  return hypotheses;
+}
+
+/**
  * The only publicly known fact about a night: who died, by identity.
  * Cause and role are never included - see the Observation docs in
  * types.ts for why an attributed "attack" observation doesn't exist.

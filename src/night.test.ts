@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AliveState, World } from "./types";
 import { defaultRoleRegistry } from "./roles";
 import {
+  enumerateHiddenNightActions,
   HiddenNightActions,
   NightHistoryContext,
   resolveNight,
@@ -194,4 +195,76 @@ test("exactly one death from a successful unanimous kill alone", () => {
     mafiaTargetChoices: { "1": "6", "2": "6" },
   });
   assert.deepEqual(result.died, ["6"]);
+});
+
+// --- enumerateHiddenNightActions ---
+
+test("enumeration count for a fully-alive 6-player world with every mechanic present", () => {
+  const hypotheses = enumerateHiddenNightActions(world, aliveAll, defaultRoleRegistry);
+  // killers: don + mafia (2), each choosing among 6 living players;
+  // don/commissioner/doctor each choosing among 6 living players too
+  const expected = 6 ** 2 * 6 * 6 * 6;
+  assert.equal(hypotheses.length, expected);
+});
+
+test("a dead Don, Commissioner, or Doctor removes that dimension entirely", () => {
+  const withoutDon = enumerateHiddenNightActions(
+    world,
+    { ...aliveAll, "1": false },
+    defaultRoleRegistry
+  );
+  // 5 living players now; killers: just mafia "2" (1); no don check dimension
+  assert.equal(withoutDon.length, 5 ** 1 * 5 * 5); // mafia choice, commissioner, doctor
+  assert.ok(withoutDon.every((h) => h.donCheckTarget === undefined));
+
+  const withoutCommissioner = enumerateHiddenNightActions(
+    world,
+    { ...aliveAll, "4": false },
+    defaultRoleRegistry
+  );
+  assert.ok(withoutCommissioner.every((h) => h.commissionerCheckTarget === undefined));
+
+  const withoutDoctor = enumerateHiddenNightActions(
+    world,
+    { ...aliveAll, "3": false },
+    defaultRoleRegistry
+  );
+  assert.ok(withoutDoctor.every((h) => h.doctorSaveTarget === undefined));
+});
+
+test("a dead mafia member cannot contribute a kill choice", () => {
+  const alive = { ...aliveAll, "2": false };
+  const hypotheses = enumerateHiddenNightActions(world, alive, defaultRoleRegistry);
+  assert.ok(hypotheses.every((h) => h.mafiaTargetChoices["2"] === undefined));
+  // 5 living players now; only don remains as a killer
+  assert.equal(hypotheses.length, 5 ** 4); // don kill choice, don check, commissioner check, doctor save
+});
+
+test("self-targeting is included for every mechanic", () => {
+  const hypotheses = enumerateHiddenNightActions(world, aliveAll, defaultRoleRegistry);
+  assert.ok(hypotheses.some((h) => h.mafiaTargetChoices["1"] === "1"));
+  assert.ok(hypotheses.some((h) => h.donCheckTarget === "1"));
+  assert.ok(hypotheses.some((h) => h.commissionerCheckTarget === "4"));
+  assert.ok(hypotheses.some((h) => h.doctorSaveTarget === "3"));
+});
+
+test("doctor repeat-target hypotheses are intentionally included, unlike resolveNight called with real history", () => {
+  const hypotheses = enumerateHiddenNightActions(world, aliveAll, defaultRoleRegistry);
+  // every living player appears as a doctorSaveTarget, including "5" - even
+  // though a real previous night might have also targeted "5"
+  const doctorTargets = new Set(hypotheses.map((h) => h.doctorSaveTarget));
+  assert.deepEqual([...doctorTargets].sort(), Object.keys(world.roles).sort());
+
+  // resolveNight itself WOULD throw if actually given that history - proving
+  // the constraint is real and enumeration is knowingly not applying it here
+  const repeatHypothesis = hypotheses.find((h) => h.doctorSaveTarget === "5")!;
+  assert.throws(() =>
+    resolveNight(
+      world,
+      repeatHypothesis,
+      aliveAll,
+      { previousDoctorSaveTarget: "5" },
+      defaultRoleRegistry
+    )
+  );
 });

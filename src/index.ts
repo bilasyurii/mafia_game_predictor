@@ -8,6 +8,8 @@ import { createLikelihoodModel, EvidenceContext } from "./evidence";
 import { createHandlers } from "./likelihoodHandlers";
 import { defaultRoleRegistry, validateGameConfig } from "./roles";
 import { defaultGroupRegistry } from "./roleGroups";
+import { createNightResultHandler } from "./nightResultLikelihood";
+import { createUniformActionModel } from "./uniformActionModel";
 
 const game: GameConfig = {
   players: ["1", "2", "3", "4", "5", "6", "7", "8"],
@@ -46,7 +48,8 @@ const ctx: EvidenceContext = {
 // handlers end to end. Every other observation type is still an
 // uncalibrated stub.
 const model = createLikelihoodModel(
-  createHandlers({ truthful: 0.9, false: 0.1 }, { truthful: 0.8, false: 0.2 })
+  createHandlers({ truthful: 0.9, false: 0.1 }, { truthful: 0.8, false: 0.2 }),
+  createNightResultHandler(createUniformActionModel(defaultRoleRegistry))
 );
 
 console.log(
