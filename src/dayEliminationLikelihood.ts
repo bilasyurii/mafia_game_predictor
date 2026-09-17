@@ -14,6 +14,87 @@ function sameEliminatedSet(a: PlayerId[], b: PlayerId[]): boolean {
 }
 
 /**
+ * The CandidateVote/KeepOrEliminateVote stage, if any, `vote` is REQUIRED to
+ * immediately follow within its own round's recorded vote sequence, per
+ * rules.md's narrated procedure: an initial tie is followed by a revote on
+ * exactly the tied candidates, and only if THAT also ties is it followed by
+ * a KeepOrEliminateVote on exactly its tied candidates - never skipped,
+ * never reordered. "none" means `vote` must be its round's FIRST vote event
+ * and nothing else - only an "initial" CandidateVote opens a round's voting,
+ * and rules.md narrates the day's entire vote (initial, its optional
+ * revote, its optional final keep-or-eliminate) as a single event, with the
+ * next round beginning at night right after it: there is no second,
+ * independent voting cycle within the same round.
+ */
+function requiredPredecessorKind(
+  vote: CandidateVote | KeepOrEliminateVote
+): "initial" | "revote" | "none" {
+  if (vote.type === "candidateVote" && vote.stage === "revote") return "initial";
+  if (vote.type === "keepOrEliminateVote") return "revote";
+  return "none";
+}
+
+/**
+ * Validates that a vote event legitimately follows the vote immediately
+ * before it in ITS OWN round's recorded vote sequence (dayVotes, in
+ * resolveDayElimination below) - never an earlier vote further back, and
+ * never a later one. An "initial" vote must have no predecessor at all (it
+ * opens the round, exactly once - see requiredPredecessorKind); a revote or
+ * KeepOrEliminateVote must have a predecessor of the required stage that
+ * resolved to a tie, with `vote.candidates` equal (as a set - order never
+ * matters, and validateCandidates already rules out duplicates) to exactly
+ * that tie. World-independent, and reuses resolveCandidateVote/
+ * sameEliminatedSet rather than re-deriving tie outcomes. Only ever called
+ * with vote events already known to belong to the same round (see
+ * resolveDayElimination's own dayVotes filter) - this never re-derives
+ * round membership itself.
+ */
+function validateVoteChainStep(
+  vote: CandidateVote | KeepOrEliminateVote,
+  precedingSameRoundVote: CandidateVote | KeepOrEliminateVote | undefined,
+  alive: AliveState
+): void {
+  const requiredKind = requiredPredecessorKind(vote);
+  const subject =
+    vote.type === "candidateVote"
+      ? vote.stage === "initial"
+        ? `round ${vote.round}'s initial vote`
+        : `round ${vote.round}'s revote`
+      : `round ${vote.round}'s keepOrEliminateVote`;
+
+  if (requiredKind === "none") {
+    if (precedingSameRoundVote !== undefined) {
+      throw new Error(
+        `${subject} must be the first vote of its round, but a vote event already precedes it in round ${vote.round}`
+      );
+    }
+    return;
+  }
+
+  if (
+    precedingSameRoundVote === undefined ||
+    precedingSameRoundVote.type !== "candidateVote" ||
+    precedingSameRoundVote.stage !== requiredKind
+  ) {
+    throw new Error(
+      `${subject} must immediately follow a ${requiredKind} candidateVote of the same round`
+    );
+  }
+
+  const outcome = resolveCandidateVote(precedingSameRoundVote, alive);
+  if (outcome.kind !== "tie") {
+    throw new Error(
+      `${subject} must follow a tie, but its preceding ${requiredKind} vote had a unique winner ("${outcome.candidate}")`
+    );
+  }
+  if (!sameEliminatedSet(outcome.candidates, vote.candidates)) {
+    throw new Error(
+      `${subject}'s candidates [${vote.candidates.join(", ")}] do not match the preceding tie [${outcome.candidates.join(", ")}]`
+    );
+  }
+}
+
+/**
  * The set of players a specific day's vote chain actually resolves to
  * eliminate, per voting.ts's own deterministic rules - never reimplemented
  * here, only consulted. A CandidateVote (initial or revote) that ends in a
@@ -61,6 +142,14 @@ function expectedElimination(
  * only ever continues past a tie, so its last recorded vote is always the
  * one that actually decided the day.
  *
+ * Before checking the decisive vote's own outcome, every revote or
+ * KeepOrEliminateVote in this round's own vote sequence is validated
+ * against the vote immediately before it (validateVoteChainStep) - so an
+ * illegitimate chain (a revote that isn't preceded by a matching tie, a
+ * KeepOrEliminateVote that skips the required revote, etc.) is rejected
+ * even if the final DayEliminationFact's own eliminated set happens to
+ * look consistent with the (illegitimate) decisive vote's tally.
+ *
  * `world` is unused and present only for shape-parity with every other
  * evidence handler in this codebase (ObservationHandler, NightResultHandler)
  * - this fact's likelihood is never a function of it.
@@ -81,6 +170,10 @@ export function resolveDayElimination(
       `dayElimination for round ${fact.round} has no preceding candidateVote or keepOrEliminateVote to validate against`
     );
   }
+
+  dayVotes.forEach((vote, i) => {
+    validateVoteChainStep(vote, dayVotes[i - 1], ctx.alive);
+  });
 
   const decisive = dayVotes[dayVotes.length - 1];
   const expected = expectedElimination(decisive, ctx.alive);

@@ -2,6 +2,7 @@ import { AliveState, GameConfig, Observation, World } from "./types";
 import { RoleRegistry } from "./roles";
 import { GroupRegistry } from "./roleGroups";
 import { NightResultFact } from "./night";
+import { assertAlive } from "./facts";
 import type { DayEliminationFact } from "./facts";
 import { resolveDayElimination } from "./dayEliminationLikelihood";
 
@@ -80,6 +81,19 @@ export type NightResultHandler = (
  * injected handlers may consult RoleRegistry, and only ever generically
  * (e.g. hasMechanic(ctx.roles, role, "checkIsMafia")), never via a literal
  * comparison like role === "commissioner".
+ *
+ * Every Observation with a single `actor` (selfRoleClaim, roleAssertion,
+ * investigationReport, suspect, defend, nominate - every Observation except
+ * the two vote types, which have many participants and validate each one's
+ * own aliveness themselves, in voting.ts) is checked with assertAlive
+ * before reaching its handler: a dead player cannot produce a NEW
+ * observation. This is a mechanical, world-independent precondition - not
+ * role-specific logic - so it belongs here rather than duplicated across
+ * six handler modules. ctx.alive is already the alive state at the start
+ * of this evidence's own phase (see facts.ts's getAliveStateForEvidence),
+ * so a player who is only eliminated later THIS SAME phase (e.g. "last
+ * words" spoken right after one's own day elimination) is still correctly
+ * alive here and unaffected by this check.
  */
 export function createLikelihoodModel(
   handlers: ObservationHandlerMap,
@@ -96,6 +110,9 @@ export function createLikelihoodModel(
       }
       if (evidence.type === "dayElimination") {
         return resolveDayElimination(evidence, world, ctx);
+      }
+      if (evidence.type !== "candidateVote" && evidence.type !== "keepOrEliminateVote") {
+        assertAlive(ctx.alive, evidence.actor);
       }
       const handler = handlers[evidence.type] as ObservationHandler;
       return handler(evidence, world, ctx);

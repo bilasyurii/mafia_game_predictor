@@ -69,6 +69,9 @@ test("a CandidateVote with a unique winner validates a matching DayEliminationFa
 
 // --- tie -> revote -> tie again -> final KeepOrEliminateVote ---
 
+// this scenario also exercises the voting-chain validation below: the
+// revote's candidates ([3,4]) match the initial tie, and the
+// keepOrEliminateVote's candidates ([3,4]) match the revote's own tie
 test("a tie, revote tie, then a decisive KeepOrEliminateVote validates the full eliminate-all outcome", () => {
   const initialVote: CandidateVote = {
     type: "candidateVote",
@@ -103,6 +106,8 @@ test("a tie, revote tie, then a decisive KeepOrEliminateVote validates the full 
 // --- kept-all outcome -> empty eliminated list ---
 
 test("a KeepOrEliminateVote resolving to keepAll validates an empty eliminated list", () => {
+  // per rules.md, a KeepOrEliminateVote must be preceded by a tied revote,
+  // not directly by the initial tie - see the voting-chain tests below
   const initialVote: CandidateVote = {
     type: "candidateVote",
     round: 1,
@@ -110,13 +115,20 @@ test("a KeepOrEliminateVote resolving to keepAll validates an empty eliminated l
     candidates: ["3", "4"],
     handsRaised: { "3": ["1", "2"], "4": ["3", "4"] }, // tie
   };
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "3"], "4": ["2", "4"] }, // 2 vs 2 again -> tie
+  };
   const keepOrEliminate: KeepOrEliminateVote = {
     type: "keepOrEliminateVote",
     round: 1,
     candidates: ["3", "4"],
     eliminateHands: ["1"], // 1 eliminate vs 3 keep -> keepAll
   };
-  const ctx = makeCtx({ history: [initialVote, keepOrEliminate] });
+  const ctx = makeCtx({ history: [initialVote, revote, keepOrEliminate] });
 
   const result = resolveDayElimination(day(1, []), someWorld, ctx);
   assert.equal(result, 1);
@@ -156,6 +168,276 @@ test("a DayEliminationFact with no preceding vote evidence for that round throws
     () => resolveDayElimination(day(1, ["3"]), someWorld, ctx),
     /has no preceding candidateVote or keepOrEliminateVote/
   );
+});
+
+// --- voting-chain consistency: a revote or KeepOrEliminateVote must
+// legitimately follow the vote immediately before it in the same round ---
+
+const initialTie: CandidateVote = {
+  type: "candidateVote",
+  round: 1,
+  stage: "initial",
+  candidates: ["3", "4"],
+  handsRaised: { "3": ["1", "2"], "4": ["3", "4"] }, // 2 vs 2 -> tie
+};
+
+test("revote: a valid initial tie followed by a matching revote is accepted", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "2", "3"], "4": [] }, // "3" wins 3-1, unique
+  };
+  const ctx = makeCtx({ history: [initialTie, revote] });
+  assert.equal(resolveDayElimination(day(1, ["3"]), someWorld, ctx), 1);
+});
+
+test("revote: a revote after an initial vote that had a unique winner is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1"], "4": ["2"] },
+  };
+  const ctx = makeCtx({ history: [uniqueWinnerVote, revote] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["3"]), someWorld, ctx),
+    /must follow a tie, but its preceding initial vote had a unique winner/
+  );
+});
+
+test("revote: a revote with a candidate set unrelated to the tie is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["1", "2"],
+    handsRaised: { "1": ["3"], "2": ["4"] },
+  };
+  const ctx = makeCtx({ history: [initialTie, revote] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["1"]), someWorld, ctx),
+    /do not match the preceding tie/
+  );
+});
+
+test("revote: a revote covering only a subset of a three-way tie is rejected", () => {
+  // 4 living players can never split evenly 3 ways (4 is not divisible by
+  // 3), so this test uses a 6-player alive state for a genuine 1-1-1-style
+  // (here 2-2-2) three-way tie.
+  const sixPlayerAlive: AliveState = {
+    "1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
+  };
+  const threeWayTie: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "initial",
+    candidates: ["2", "3", "4"],
+    // voted = {1,6,2,5,3}; abstainer "4" (itself) -> last candidate "4"
+    // "2"=2 (1,6), "3"=2 (2,5), "4"=1(3)+1(abstain)=2 -> three-way tie
+    handsRaised: { "2": ["1", "6"], "3": ["2", "5"], "4": ["3"] },
+  };
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"], // missing "2"
+    handsRaised: { "3": ["1"], "4": ["2"] },
+  };
+  const ctx = makeCtx({ history: [threeWayTie, revote], alive: sixPlayerAlive });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["3"]), someWorld, ctx),
+    /do not match the preceding tie/
+  );
+});
+
+test("revote: a revote with an extra candidate beyond the tied set is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4", "2"], // "2" was never tied
+    handsRaised: { "3": ["1"], "4": ["2"], "2": ["3"] },
+  };
+  const ctx = makeCtx({ history: [initialTie, revote] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["3"]), someWorld, ctx),
+    /do not match the preceding tie/
+  );
+});
+
+test("revote: candidate ordering differs from the tie but the set is identical - accepted", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["4", "3"], // reversed order from the tie's ["3","4"]
+    handsRaised: { "3": ["1", "2", "3"], "4": [] },
+  };
+  const ctx = makeCtx({ history: [initialTie, revote] });
+  assert.equal(resolveDayElimination(day(1, ["3"]), someWorld, ctx), 1);
+});
+
+// --- a round has exactly one voting chain: rules.md narrates the whole
+// day's vote (initial, its optional revote, its optional final
+// keep-or-eliminate) as a single event, with the next round beginning at
+// night right after it - never a second, independent voting cycle ---
+
+test("a second initial vote for the same round, with no preceding vote at all, is rejected", () => {
+  const secondInitial: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "initial",
+    candidates: ["1", "2"],
+    handsRaised: { "1": ["3"], "2": ["4"] },
+  };
+  const ctx = makeCtx({ history: [initialTie, secondInitial] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["1"]), someWorld, ctx),
+    /must be the first vote of its round/
+  );
+});
+
+test("a second initial vote after a completed initial -> revote -> keepOrEliminate chain is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "2", "3"], "4": [] }, // "3" wins 3-1, unique
+  };
+  const secondInitial: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "initial",
+    candidates: ["1", "2"],
+    handsRaised: { "1": ["3"], "2": ["4"] },
+  };
+  const ctx = makeCtx({ history: [initialTie, revote, secondInitial] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["1"]), someWorld, ctx),
+    /must be the first vote of its round/
+  );
+});
+
+test("a second revote directly after the first revote (no keepOrEliminate in between) is rejected", () => {
+  const firstRevote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "3"], "4": ["2", "4"] }, // 2 vs 2 -> tie again
+  };
+  const secondRevote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "2", "3"], "4": [] },
+  };
+  const ctx = makeCtx({ history: [initialTie, firstRevote, secondRevote] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["3"]), someWorld, ctx),
+    /must immediately follow a initial candidateVote of the same round/
+  );
+});
+
+test("a revote directly after a KeepOrEliminateVote is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "3"], "4": ["2", "4"] }, // 2 vs 2 -> tie
+  };
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["3", "4"],
+    eliminateHands: ["1", "2", "3"],
+  };
+  const trailingRevote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "2", "3"], "4": [] },
+  };
+  const ctx = makeCtx({ history: [initialTie, revote, keepOrEliminate, trailingRevote] });
+  assert.throws(
+    () => resolveDayElimination(day(1, ["3", "4"]), someWorld, ctx),
+    /must immediately follow a initial candidateVote of the same round/
+  );
+});
+
+const revoteTie: CandidateVote = {
+  type: "candidateVote",
+  round: 1,
+  stage: "revote",
+  candidates: ["3", "4"],
+  handsRaised: { "3": ["1", "3"], "4": ["2", "4"] }, // 2 vs 2 -> tie again
+};
+
+test("keepOrEliminateVote: directly following an initial tie without a revote is rejected", () => {
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["3", "4"],
+    eliminateHands: ["1"],
+  };
+  const ctx = makeCtx({ history: [initialTie, keepOrEliminate] });
+  assert.throws(
+    () => resolveDayElimination(day(1, []), someWorld, ctx),
+    /must immediately follow a revote candidateVote/
+  );
+});
+
+test("keepOrEliminateVote: following a revote that had a unique winner is rejected", () => {
+  const revote: CandidateVote = {
+    type: "candidateVote",
+    round: 1,
+    stage: "revote",
+    candidates: ["3", "4"],
+    handsRaised: { "3": ["1", "2", "3"], "4": [] }, // "3" wins 3-1, unique
+  };
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["3", "4"],
+    eliminateHands: ["1"],
+  };
+  const ctx = makeCtx({ history: [initialTie, revote, keepOrEliminate] });
+  assert.throws(
+    () => resolveDayElimination(day(1, []), someWorld, ctx),
+    /must follow a tie, but its preceding revote vote had a unique winner/
+  );
+});
+
+test("keepOrEliminateVote: a candidate set unrelated to the revote's tie is rejected", () => {
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["1", "2"],
+    eliminateHands: ["3"],
+  };
+  const ctx = makeCtx({ history: [initialTie, revoteTie, keepOrEliminate] });
+  assert.throws(
+    () => resolveDayElimination(day(1, []), someWorld, ctx),
+    /do not match the preceding tie/
+  );
+});
+
+test("keepOrEliminateVote: candidate ordering differs from the revote's tie but the set is identical - accepted", () => {
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["4", "3"], // reversed order from the revote tie's ["3","4"]
+    eliminateHands: ["1", "2", "3"], // 3 eliminate vs 1 keep -> eliminateAll
+  };
+  const ctx = makeCtx({ history: [initialTie, revoteTie, keepOrEliminate] });
+  assert.equal(resolveDayElimination(day(1, ["3", "4"]), someWorld, ctx), 1);
 });
 
 // --- likelihood is world-independent ---
@@ -220,4 +502,42 @@ test("a night + day (unique winner) + night sequence processes end to end with a
       `world ${i}: ${world.probability} vs ${steps[1].posterior[i].probability}`
     );
   });
+});
+
+test("a malformed voting sequence (KeepOrEliminateVote skipping the required revote) is rejected through the real processEvidence pipeline", () => {
+  const setting: GameSetting = {
+    config: fourPlayerConfig,
+    roles: defaultRoleRegistry,
+    groups: defaultGroupRegistry,
+  };
+  const model = createLikelihoodModel(
+    createHandlers(
+      { truthful: 0.9, false: 0.1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { sameTeamVote: 0.5, differentTeamVote: 0.5, abstain: 0.5 },
+      {
+        eliminateSharedTeam: 0.5,
+        keepSharedTeam: 0.5,
+        eliminateNoSharedTeam: 0.5,
+        keepNoSharedTeam: 0.5,
+      }
+    )
+  );
+
+  const keepOrEliminate: KeepOrEliminateVote = {
+    type: "keepOrEliminateVote",
+    round: 1,
+    candidates: ["3", "4"],
+    eliminateHands: ["1"],
+  };
+  const log = [initialTie, keepOrEliminate, day(1, [])];
+
+  assert.throws(
+    () => processEvidence(generateWorlds(fourPlayerConfig), log, model, setting),
+    /must immediately follow a revote candidateVote/
+  );
 });
