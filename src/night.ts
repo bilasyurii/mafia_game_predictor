@@ -45,6 +45,59 @@ export interface NightResolution {
   died: PlayerId[];
 }
 
+/** Inputs resolveDeaths needs: the already-resolved outcome of each night mechanic. */
+export interface DeathResolutionInputs {
+  mafiaKillSucceeded: boolean;
+  mafiaKillTarget?: PlayerId;
+  commissionerCheckTarget?: PlayerId;
+  /** getInvestigationResult("checkIsMafia", commissionerCheckTarget's role). */
+  commissionerCheckResult?: boolean;
+  doctorSavedTarget?: PlayerId;
+}
+
+export interface DeathResolutionOutcome {
+  commissionerCausedDeath?: PlayerId;
+  died: PlayerId[];
+}
+
+/**
+ * The pure "combine already-resolved mechanic outcomes into a death list"
+ * step of resolveNight, extracted into its own function so resolveNight and
+ * nightResultLikelihood.ts's optimized marginalization path both use the
+ * identical rule - never two hand-maintained copies that could drift apart.
+ * Takes no World/registry/hidden-actions: by the time this runs, every
+ * mechanic's outcome (who the mafia unanimously killed, if anyone; who the
+ * commissioner checked and whether that check was positive; who the doctor
+ * saved) is already known.
+ */
+export function resolveDeaths(inputs: DeathResolutionInputs): DeathResolutionOutcome {
+  const {
+    mafiaKillSucceeded,
+    mafiaKillTarget,
+    commissionerCheckTarget,
+    commissionerCheckResult,
+    doctorSavedTarget,
+  } = inputs;
+
+  let commissionerCausedDeath: PlayerId | undefined;
+  if (commissionerCheckResult && commissionerCheckTarget !== doctorSavedTarget) {
+    commissionerCausedDeath = commissionerCheckTarget;
+  }
+
+  const died: PlayerId[] = [];
+  if (mafiaKillSucceeded && mafiaKillTarget !== doctorSavedTarget) {
+    died.push(mafiaKillTarget!);
+  }
+  if (
+    commissionerCausedDeath !== undefined &&
+    !died.includes(commissionerCausedDeath)
+  ) {
+    died.push(commissionerCausedDeath);
+  }
+
+  return { commissionerCausedDeath, died };
+}
+
 /**
  * Deterministic night-mechanics resolution: World + hidden actions +
  * history -> what happened. No probabilities, heuristics, or behavioral
@@ -115,30 +168,22 @@ export function resolveNight(
     (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
   );
   let commissionerCheckResult: boolean | undefined;
-  let commissionerCausedDeath: PlayerId | undefined;
   if (commissionerAlive && actions.commissionerCheckTarget !== undefined) {
-    const target = actions.commissionerCheckTarget;
     commissionerCheckResult = getInvestigationResult(
       registry,
       "checkIsMafia",
-      world.roles[target]
+      world.roles[actions.commissionerCheckTarget]
     );
-    if (commissionerCheckResult && target !== doctorSavedTarget) {
-      commissionerCausedDeath = target;
-    }
   }
 
   // --- Combine into the final death list, respecting the doctor's single save ---
-  const died: PlayerId[] = [];
-  if (mafiaKillSucceeded && mafiaKillTarget !== doctorSavedTarget) {
-    died.push(mafiaKillTarget!);
-  }
-  if (
-    commissionerCausedDeath !== undefined &&
-    !died.includes(commissionerCausedDeath)
-  ) {
-    died.push(commissionerCausedDeath);
-  }
+  const { commissionerCausedDeath, died } = resolveDeaths({
+    mafiaKillSucceeded,
+    mafiaKillTarget,
+    commissionerCheckTarget: actions.commissionerCheckTarget,
+    commissionerCheckResult,
+    doctorSavedTarget,
+  });
 
   return {
     mafiaKillSucceeded,

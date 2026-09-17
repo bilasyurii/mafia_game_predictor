@@ -63,3 +63,67 @@ test("different (world, alive) pairs get their own independent hypothesis counts
   assert.equal(pSmaller, 1 / smallerSpace.length);
   assert.notEqual(pFull, pSmaller);
 });
+
+// --- FactoredActionModel: block marginals ---
+
+test("mafiaConsensusProbability: with 2 killers (don + mafia), each specific target is (1/livingCount)^2", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const expected = 1 / 6 ** 2;
+  ["1", "2", "3", "4", "5", "6"].forEach((target) => {
+    assert.ok(
+      Math.abs(actionModel.mafiaConsensusProbability(target, world, aliveAll, {}) - expected) <
+        1e-15
+    );
+  });
+});
+
+test("mafiaConsensusProbability: consensus mass plus leftover no-consensus mass sums to 1", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const living = ["1", "2", "3", "4", "5", "6"];
+  const consensusMass = living.reduce(
+    (sum, target) => sum + actionModel.mafiaConsensusProbability(target, world, aliveAll, {}),
+    0
+  );
+  assert.ok(consensusMass < 1);
+  assert.ok(Math.abs(consensusMass - 6 * (1 / 36)) < 1e-15);
+});
+
+test("mafiaConsensusProbability: with exactly 1 killer, consensus mass sums to exactly 1 (no-consensus is impossible)", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const alive = { ...aliveAll, "1": false }; // only mafia "2" remains a killer
+  const living = ["2", "3", "4", "5", "6"];
+  const consensusMass = living.reduce(
+    (sum, target) => sum + actionModel.mafiaConsensusProbability(target, world, alive, {}),
+    0
+  );
+  assert.ok(Math.abs(consensusMass - 1) < 1e-12);
+});
+
+test("donCheckTargetProbability, commissionerCheckTargetProbability, doctorSaveTargetProbability are each uniform over living players", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const living = ["1", "2", "3", "4", "5", "6"];
+  const expected = 1 / 6;
+
+  living.forEach((target) => {
+    assert.ok(
+      Math.abs(actionModel.donCheckTargetProbability(target, world, aliveAll, {}) - expected) <
+        1e-15
+    );
+    assert.ok(
+      Math.abs(
+        actionModel.commissionerCheckTargetProbability(target, world, aliveAll, {}) - expected
+      ) < 1e-15
+    );
+    assert.ok(
+      Math.abs(
+        actionModel.doctorSaveTargetProbability(target, world, aliveAll, {}) - expected
+      ) < 1e-15
+    );
+  });
+
+  const total = living.reduce(
+    (sum, target) => sum + actionModel.doctorSaveTargetProbability(target, world, aliveAll, {}),
+    0
+  );
+  assert.ok(Math.abs(total - 1) < 1e-9);
+});

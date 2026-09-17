@@ -6,6 +6,7 @@ import {
   enumerateHiddenNightActions,
   HiddenNightActions,
   NightHistoryContext,
+  resolveDeaths,
   resolveNight,
 } from "./night";
 
@@ -195,6 +196,56 @@ test("exactly one death from a successful unanimous kill alone", () => {
     mafiaTargetChoices: { "1": "6", "2": "6" },
   });
   assert.deepEqual(result.died, ["6"]);
+});
+
+// --- resolveDeaths (extracted, shared by resolveNight and the optimized
+// nightResultLikelihood path) ---
+
+test("resolveDeaths: no mechanic fired -> no deaths", () => {
+  const { died, commissionerCausedDeath } = resolveDeaths({ mafiaKillSucceeded: false });
+  assert.deepEqual(died, []);
+  assert.equal(commissionerCausedDeath, undefined);
+});
+
+test("resolveDeaths: doctor save cancels the mafia kill", () => {
+  const { died } = resolveDeaths({
+    mafiaKillSucceeded: true,
+    mafiaKillTarget: "5",
+    doctorSavedTarget: "5",
+  });
+  assert.deepEqual(died, []);
+});
+
+test("resolveDeaths: doctor save cancels the commissioner-caused death, not the mafia kill", () => {
+  const { died, commissionerCausedDeath } = resolveDeaths({
+    mafiaKillSucceeded: true,
+    mafiaKillTarget: "5",
+    commissionerCheckTarget: "2",
+    commissionerCheckResult: true,
+    doctorSavedTarget: "2",
+  });
+  assert.equal(commissionerCausedDeath, undefined);
+  assert.deepEqual(died, ["5"]);
+});
+
+test("resolveDeaths: mafia kill and commissioner-caused death on the same target dedupe to one death", () => {
+  const { died } = resolveDeaths({
+    mafiaKillSucceeded: true,
+    mafiaKillTarget: "2",
+    commissionerCheckTarget: "2",
+    commissionerCheckResult: true,
+  });
+  assert.deepEqual(died, ["2"]);
+});
+
+test("resolveDeaths: a negative commissioner check never causes a death regardless of target/save", () => {
+  const { died, commissionerCausedDeath } = resolveDeaths({
+    mafiaKillSucceeded: false,
+    commissionerCheckTarget: "5",
+    commissionerCheckResult: false,
+  });
+  assert.equal(commissionerCausedDeath, undefined);
+  assert.deepEqual(died, []);
 });
 
 // --- enumerateHiddenNightActions ---
