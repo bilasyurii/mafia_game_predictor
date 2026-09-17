@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/index.ts",
-    "test": "node --require ts-node/register --test src/*.test.ts"
+    "test": "node --require ts-node/register --test \"src/**/*.test.ts\""
   },
   "author": "Yurii Bilas",
   "license": "ISC",
