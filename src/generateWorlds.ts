@@ -1,11 +1,22 @@
 import { GameConfig, PlayerId, RoleId, World } from "./types";
+import { defaultRoleRegistry, RoleRegistry, validateGameConfig } from "./roles";
 
 /**
  * Generates every distinct way to assign config.roles to config.players.
  * Duplicate roles (e.g. two "mafia") do not produce duplicate worlds -
  * swapping which player holds which of two identical roles is the same world.
+ *
+ * Validates config against registry (defaultRoleRegistry unless a caller
+ * passes its own) before generating anything, so an invalid config - e.g.
+ * a unique role appearing more than once - is rejected here rather than
+ * silently producing worlds that violate the game's own rules.
  */
-export function generateWorlds(config: GameConfig): World[] {
+export function generateWorlds(
+  config: GameConfig,
+  registry: RoleRegistry = defaultRoleRegistry
+): World[] {
+  validateGameConfig(config, registry);
+
   const { players, roles } = config;
 
   if (players.length !== roles.length) {
