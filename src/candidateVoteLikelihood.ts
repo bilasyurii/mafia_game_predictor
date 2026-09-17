@@ -1,12 +1,24 @@
 import { EvidenceContext, ObservationHandler } from "./evidence";
-import { CandidateVote, World } from "./types";
+import { CandidateVote, PlayerId, World } from "./types";
 import { sameTeam } from "./roles";
 import { tallyCandidateVote } from "./voting";
 
-/** Either a fixed number, or a function computed from the full evidence. */
+/**
+ * Either a fixed number, or a function computed from the full evidence PLUS
+ * `voter` - the specific living player this factor is being scored for.
+ * `voter` is required, not optional: one CandidateVote covers many voters at
+ * once (see createCandidateVoteHandler's per-voter loop below), so a
+ * function-valued factor that wants to condition on the ACTOR's own role
+ * (e.g. "how a Mafia voter behaves" vs "how a Town voter behaves" - see
+ * behavioralModel.ts) has no other way to know which voter it is currently
+ * being asked about; `observation`/`world`/`ctx` alone never identify one.
+ * A callback that ignores `voter` (as every existing test-only function
+ * value in this codebase does) remains valid - TypeScript/JS allow calling a
+ * function with more arguments than it declares.
+ */
 export type CandidateVoteLikelihood =
   | number
-  | ((observation: CandidateVote, world: World, ctx: EvidenceContext) => number);
+  | ((observation: CandidateVote, world: World, ctx: EvidenceContext, voter: PlayerId) => number);
 
 /**
  * Configurable parameters for scoring a CandidateVote. Three buckets, one
@@ -29,9 +41,10 @@ function resolve(
   value: CandidateVoteLikelihood,
   observation: CandidateVote,
   world: World,
-  ctx: EvidenceContext
+  ctx: EvidenceContext,
+  voter: PlayerId
 ): number {
-  return typeof value === "function" ? value(observation, world, ctx) : value;
+  return typeof value === "function" ? value(observation, world, ctx, voter) : value;
 }
 
 /**
@@ -68,11 +81,11 @@ export function createCandidateVoteHandler(
         )
           ? params.sameTeamVote
           : params.differentTeamVote;
-        likelihood *= resolve(factor, observation, world, ctx);
+        likelihood *= resolve(factor, observation, world, ctx, voter);
       });
     });
-    tally.abstainers.forEach(() => {
-      likelihood *= resolve(params.abstain, observation, world, ctx);
+    tally.abstainers.forEach((voter) => {
+      likelihood *= resolve(params.abstain, observation, world, ctx, voter);
     });
 
     return likelihood;

@@ -27,3 +27,21 @@ export function getExpressionProbability(
     .filter((world) => satisfiedBy(expr, world.roles[player], groups))
     .reduce((sum, world) => sum + world.probability, 0);
 }
+
+/**
+ * Every living player's P(satisfies `expr`) (e.g. the "mafia" group, for
+ * "who looks most suspicious"), sorted highest first - the smallest useful
+ * wrapper for replaying a real game and asking "who should we suspect
+ * right now", reusing getExpressionProbability rather than a new query
+ * mechanism.
+ */
+export function rankByProbability(
+  worlds: World[],
+  players: PlayerId[],
+  expr: RoleExpression,
+  groups?: GroupRegistry
+): { player: PlayerId; probability: number }[] {
+  return players
+    .map((player) => ({ player, probability: getExpressionProbability(worlds, player, expr, groups) }))
+    .sort((a, b) => b.probability - a.probability);
+}

@@ -3,10 +3,18 @@ import { KeepOrEliminateVote, PlayerId, World } from "./types";
 import { sameTeam } from "./roles";
 import { tallyKeepOrEliminateVote } from "./voting";
 
-/** Either a fixed number, or a function computed from the full evidence. */
+/**
+ * Either a fixed number, or a function computed from the full evidence PLUS
+ * `voter` - the specific living player this factor is being scored for. See
+ * candidateVoteLikelihood.ts's CandidateVoteLikelihood doc for why `voter`
+ * is required: one KeepOrEliminateVote covers many voters at once, and a
+ * function-valued factor conditioning on the actor's own role needs to know
+ * which voter it's being asked about. A callback ignoring `voter` remains
+ * valid.
+ */
 export type KeepOrEliminateVoteLikelihood =
   | number
-  | ((observation: KeepOrEliminateVote, world: World, ctx: EvidenceContext) => number);
+  | ((observation: KeepOrEliminateVote, world: World, ctx: EvidenceContext, voter: PlayerId) => number);
 
 /**
  * Configurable parameters for scoring a KeepOrEliminateVote. Unlike
@@ -37,9 +45,10 @@ function resolve(
   value: KeepOrEliminateVoteLikelihood,
   observation: KeepOrEliminateVote,
   world: World,
-  ctx: EvidenceContext
+  ctx: EvidenceContext,
+  voter: PlayerId
 ): number {
-  return typeof value === "function" ? value(observation, world, ctx) : value;
+  return typeof value === "function" ? value(observation, world, ctx, voter) : value;
 }
 
 /**
@@ -74,13 +83,13 @@ export function createKeepOrEliminateVoteHandler(
       const factor = sharesTeamWithAnyCandidate(voter)
         ? params.eliminateSharedTeam
         : params.eliminateNoSharedTeam;
-      likelihood *= resolve(factor, observation, world, ctx);
+      likelihood *= resolve(factor, observation, world, ctx, voter);
     });
     tally.keep.forEach((voter) => {
       const factor = sharesTeamWithAnyCandidate(voter)
         ? params.keepSharedTeam
         : params.keepNoSharedTeam;
-      likelihood *= resolve(factor, observation, world, ctx);
+      likelihood *= resolve(factor, observation, world, ctx, voter);
     });
 
     return likelihood;
