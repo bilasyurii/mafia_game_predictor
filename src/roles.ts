@@ -70,6 +70,23 @@ export const defaultRoleRegistry: RoleRegistry = {
     team: "mafia",
     unique: true,
     mechanics: [
+      /**
+       * The Don's private preselection of 3 kill targets, declared to the
+       * moderator on the initial night and known to all Mafia. This entry
+       * is intentionally declarative-only in the current engine: it does
+       * not constrain resolveNight or enumerateHiddenNightActions (each
+       * night's mafia kill still requires every living killer to
+       * independently choose the same target, exactly as the rules
+       * specify - the plan does not mechanically determine that choice),
+       * and it does not create any public evidence (no Evidence type
+       * reveals it, and none should - the public observer never learns
+       * the plan). The current uniform ActionModel correspondingly does
+       * not model any behavioral influence from Mafia knowing the plan.
+       * Any future such effect belongs exclusively in an explicit,
+       * opt-in ActionModel - never as a default assumption, and never as
+       * a mechanical restriction, unless the game rules themselves
+       * change.
+       */
       { mechanic: "planTargets", targetsPlayer: true, usesPerGame: 1 },
       {
         mechanic: "unanimousNightKill",

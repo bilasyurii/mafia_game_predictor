@@ -6,6 +6,7 @@ import { AliveState, PlayerId, World } from "./types";
 interface Shape {
   livingCount: number;
   killerCount: number;
+  doctorAlive: boolean;
 }
 
 /**
@@ -21,10 +22,18 @@ interface Shape {
  * independent uniform distributions over each factor: each living killer
  * independently and uniformly picks among livingCount targets, so a
  * specific consensus target has probability (1/livingCount)^killerCount;
- * each of Don/Commissioner/Doctor independently and uniformly picks among
- * livingCount targets. probability()'s existing flat-uniform semantics are
- * unchanged below - these are two equivalent expressions of the same
- * distribution, not a different one.
+ * each of Don/Commissioner picks uniformly among livingCount targets.
+ *
+ * The Doctor is the one block that DOES depend on `history`: when
+ * `history.previousDoctorSaveTarget` names a player who is both currently
+ * alive and was legally excludable (the Doctor was in fact alive to have
+ * chosen it), that target is removed from tonight's domain and the
+ * remaining livingCount-1 targets are renormalized to stay uniform over
+ * exactly the legal choices - never an invented behavioral preference,
+ * just the same "uniform over whatever's actually legal" rule applied to a
+ * smaller domain. If the excluded target is no longer alive (or there is
+ * no previous target at all), the domain is unaffected: excluding a
+ * player who was never a legal choice tonight removes nothing.
  */
 export function createUniformActionModel(registry: RoleRegistry): FactoredActionModel {
   const hypothesisCountCache = new WeakMap<World, WeakMap<AliveState, number>>();
@@ -58,15 +67,45 @@ export function createUniformActionModel(registry: RoleRegistry): FactoredAction
       const killerCount = players.filter(
         (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
       ).length;
-      shape = { livingCount, killerCount };
+      const doctorAlive = players.some(
+        (p) => isAlive(p) && hasMechanic(registry, world.roles[p], "protect")
+      );
+      shape = { livingCount, killerCount, doctorAlive };
       byAlive.set(alive, shape);
     }
     return shape;
   }
 
+  /**
+   * Whether `history.previousDoctorSaveTarget` genuinely excludes a target
+   * tonight: only when there is a Doctor alive to be constrained, and the
+   * named player is actually a legal target tonight (still alive).
+   */
+  function excludedTarget(
+    world: World,
+    alive: AliveState,
+    history: { previousDoctorSaveTarget?: PlayerId }
+  ): PlayerId | undefined {
+    const target = history.previousDoctorSaveTarget;
+    if (target === undefined) return undefined;
+    if (alive[target] !== true) return undefined;
+    if (!shapeFor(world, alive).doctorAlive) return undefined;
+    return target;
+  }
+
   return {
-    probability(_actions, world, alive) {
-      return 1 / hypothesisCount(world, alive);
+    probability(actions, world, alive, history) {
+      const excluded = excludedTarget(world, alive, history);
+      const baseCount = hypothesisCount(world, alive);
+      if (excluded === undefined) {
+        return 1 / baseCount;
+      }
+      if (actions.doctorSaveTarget === excluded) {
+        return 0;
+      }
+      const { livingCount } = shapeFor(world, alive);
+      const adjustedCount = (baseCount * (livingCount - 1)) / livingCount;
+      return adjustedCount === 0 ? 0 : 1 / adjustedCount;
     },
 
     mafiaConsensusProbability(_target, world, alive) {
@@ -82,8 +121,16 @@ export function createUniformActionModel(registry: RoleRegistry): FactoredAction
       return 1 / shapeFor(world, alive).livingCount;
     },
 
-    doctorSaveTargetProbability(_target, world, alive) {
-      return 1 / shapeFor(world, alive).livingCount;
+    doctorSaveTargetProbability(target, world, alive, history) {
+      const { livingCount } = shapeFor(world, alive);
+      const excluded = excludedTarget(world, alive, history);
+      if (excluded === undefined) {
+        return 1 / livingCount;
+      }
+      if (target === excluded) {
+        return 0;
+      }
+      return livingCount - 1 === 0 ? 0 : 1 / (livingCount - 1);
     },
   };
 }

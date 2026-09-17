@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GameConfig, PlayerId, RoleId, SelfRoleClaim, World } from "./types";
+import { AliveState, GameConfig, PlayerId, RoleId, SelfRoleClaim, World } from "./types";
 import { generateWorlds } from "./generateWorlds";
 import { initAliveState } from "./facts";
 import { createLikelihoodModel, EvidenceContext } from "./evidence";
@@ -132,15 +132,17 @@ test("death-set comparison is order-independent", () => {
   assert.ok(natural > 0);
 });
 
-// --- doctor repeat-target inclusion, at the handler level ---
+// --- doctor repeat-target inclusion at round 1 (no previous night exists) ---
 
-test("the handler never throws over a doctor repeat, because it never carries real cross-night history", () => {
+test("the handler never throws at round 1, since there is no previous night to constrain it", () => {
   const handler = createNightResultHandler(createUniformActionModel(defaultRoleRegistry));
   const ctx = makeCtx(fivePlayerConfig);
 
-  // this would be a "repeat" if night 0 had also saved "5" - the handler has
-  // no way to even express that, by design (see night.ts's docs), so it
-  // just scores normally instead of throwing
+  // round 1 has no earlier NightResultFact in ctx.history, so there is
+  // nothing to exclude - matches "no previous target restriction" per
+  // requirement 1. See the "cross-night Doctor consecutive-target
+  // constraint" tests below for round 2+, where a real (marginalized)
+  // exclusion now genuinely applies.
   assert.doesNotThrow(() => handler(nightResult(1, []), fivePlayerWorld, ctx));
   assert.doesNotThrow(() => handler(nightResult(1, ["5"]), fivePlayerWorld, ctx));
 });
@@ -485,4 +487,184 @@ test("randomized differential test: optimized likelihood matches brute-force ref
   }
 
   assert.ok(comparisons > 300, `expected substantial coverage, got ${comparisons} comparisons`);
+});
+
+// =====================================================================
+// Cross-night Doctor consecutive-target constraint
+// =====================================================================
+
+const doctorMafiaConfig: GameConfig = { players: ["1", "2"], roles: ["doctor", "mafia"] };
+const doctorMafiaWorld: World = { probability: 1, roles: { "1": "doctor", "2": "mafia" } };
+const doctorMafiaAlive: AliveState = { "1": true, "2": true };
+
+function ctxWithHistory(history: NightResultFact[]): EvidenceContext {
+  return makeCtx(doctorMafiaConfig, { alive: doctorMafiaAlive, history });
+}
+
+function bothHandlers(actionModel: ReturnType<typeof createUniformActionModel>) {
+  return [
+    createBruteForceNightResultHandler(actionModel),
+    createOptimizedNightResultHandler(actionModel),
+  ];
+}
+
+test("hand-computable: night 1's death pins the Doctor's target to certainty, making a repeat impossible on night 2", () => {
+  // night 1 died=["1"] is only reachable via (mafia targets "1", doctor
+  // saves "2") - the ONLY matching hypothesis out of 4 - so given this
+  // observation the Doctor certainly saved "2" last night. Night 2 must
+  // therefore exclude "2", forcing the Doctor onto "1" with certainty (only
+  // 2 living players): "1" can never die tonight, and died=[]/died=["2"]
+  // split the remaining probability mass evenly.
+  const ctx = ctxWithHistory([nightResult(1, ["1"])]);
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+
+  bothHandlers(actionModel).forEach((handler) => {
+    assert.equal(handler(nightResult(2, ["1"]), doctorMafiaWorld, ctx), 0);
+    assert.ok(Math.abs(handler(nightResult(2, []), doctorMafiaWorld, ctx) - 0.5) < 1e-12);
+    assert.ok(Math.abs(handler(nightResult(2, ["2"]), doctorMafiaWorld, ctx) - 0.5) < 1e-12);
+  });
+});
+
+test("hand-computable: an ambiguous night 1 (no death) gives a 50/50 belief, correctly combined for night 2", () => {
+  // night 1 died=[] is reachable via EITHER (mafia targets "1", doctor
+  // saves "1") OR (mafia targets "2", doctor saves "2"), each equally
+  // weighted - so the belief over the Doctor's real target is exactly
+  // 50/50. Night 2's likelihood is the WEIGHTED COMBINATION of both
+  // branches (doctor forced onto "2" in one, onto "1" in the other),
+  // which for this specific 2-player world happens to reproduce the same
+  // 1/2, 1/4, 1/4 split as an unconstrained single night - a genuine
+  // multi-branch belief combination, verified exactly, not a coincidence
+  // that would show up as a difference from the unconstrained baseline.
+  const ctx = ctxWithHistory([nightResult(1, [])]);
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+
+  bothHandlers(actionModel).forEach((handler) => {
+    assert.ok(Math.abs(handler(nightResult(2, []), doctorMafiaWorld, ctx) - 0.5) < 1e-12);
+    assert.ok(Math.abs(handler(nightResult(2, ["1"]), doctorMafiaWorld, ctx) - 0.25) < 1e-12);
+    assert.ok(Math.abs(handler(nightResult(2, ["2"]), doctorMafiaWorld, ctx) - 0.25) < 1e-12);
+  });
+});
+
+test("a Doctor who dies during night 1 imposes no constraint on night 2 (no living Doctor to have a target)", () => {
+  const config: GameConfig = {
+    players: ["1", "2", "3"],
+    roles: ["doctor", "mafia", "citizen"],
+  };
+  const world: World = { probability: 1, roles: { "1": "doctor", "2": "mafia", "3": "citizen" } };
+  const alive2: AliveState = { "1": false, "2": true, "3": true }; // the Doctor died night 1
+
+  const ctx = makeCtx(config, { alive: alive2, history: [nightResult(1, ["1"])] });
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+
+  bothHandlers(actionModel).forEach((handler) => {
+    // no Doctor alive tonight - a lone mafia killer always succeeds, so a
+    // "no death" night 2 is exactly impossible, same as the no-special-
+    // roles baseline (proves no stray exclusion carried forward)
+    assert.equal(handler(nightResult(2, []), world, ctx), 0);
+    assert.ok(handler(nightResult(2, ["2"]), world, ctx) > 0);
+    assert.ok(handler(nightResult(2, ["3"]), world, ctx) > 0);
+  });
+});
+
+test("randomized multi-night differential test: optimized matches brute-force reference across 2-night sequences with a living Doctor", () => {
+  const rand = mulberry32(7);
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const optimized = createOptimizedNightResultHandler(actionModel);
+  const bruteForce = createBruteForceNightResultHandler(actionModel);
+
+  const TRIALS = 60;
+  let comparisons = 0;
+
+  for (let trial = 0; trial < TRIALS; trial++) {
+    const { config, world } = randomWorld(rand);
+    if (!config.roles.includes("doctor")) continue; // only meaningful with a Doctor present
+    const aliveAtNight1: AliveState = {};
+    config.players.forEach((p) => {
+      aliveAtNight1[p] = true;
+    });
+
+    const livingAtNight1 = config.players;
+    const night1Died: PlayerId[] =
+      rand() < 0.5 ? [] : [livingAtNight1[Math.floor(rand() * livingAtNight1.length)]];
+
+    const aliveAtNight2: AliveState = { ...aliveAtNight1 };
+    night1Died.forEach((p) => {
+      aliveAtNight2[p] = false;
+    });
+    const livingAtNight2 = config.players.filter((p) => aliveAtNight2[p]);
+    if (livingAtNight2.length === 0) continue;
+
+    const ctx = makeCtx(config, {
+      alive: aliveAtNight2,
+      history: [nightResult(1, night1Died)],
+    });
+
+    const candidateFacts: PlayerId[][] = [[]];
+    candidateFacts.push([livingAtNight2[Math.floor(rand() * livingAtNight2.length)]]);
+
+    candidateFacts.forEach((died) => {
+      const fact = nightResult(2, died);
+      const o = optimized(fact, world, ctx);
+      const b = bruteForce(fact, world, ctx);
+      assert.ok(
+        Math.abs(o - b) < 1e-9,
+        `trial ${trial}, world=${JSON.stringify(world.roles)}, night1Died=${JSON.stringify(
+          night1Died
+        )}, died=${JSON.stringify(died)}: optimized=${o}, bruteForce=${b}`
+      );
+      comparisons++;
+    });
+  }
+
+  assert.ok(comparisons > 20, `expected substantial coverage, got ${comparisons} comparisons`);
+});
+
+test("a sole-survivor Doctor forced into a repeat makes that world impossible for the following night, at the handler level", () => {
+  // in the 2-player {doctor, mafia} world, night 1 died=["1"] pins the
+  // Doctor's night-1 target to certainty (see the hand-computable test
+  // above). In the world where "1" was the mafia (and so died, leaving
+  // only the Doctor "2" alive), the Doctor is now the SOLE living player,
+  // excluded from re-targeting the one and only legal choice (themselves)
+  // - there is no legal Doctor action left at all, so this world's
+  // likelihood is exactly 0 for every possible night-2 fact.
+  const config: GameConfig = { players: ["1", "2"], roles: ["doctor", "mafia"] };
+  const worldMafiaFirst: World = { probability: 1, roles: { "1": "mafia", "2": "doctor" } };
+  const alive2: AliveState = { "1": false, "2": true };
+  const ctx = makeCtx(config, { alive: alive2, history: [nightResult(1, ["1"])] });
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+
+  bothHandlers(actionModel).forEach((handler) => {
+    [[], ["2"]].forEach((died) => {
+      assert.equal(handler(nightResult(2, died), worldMafiaFirst, ctx), 0);
+    });
+  });
+});
+
+test("integration through processEvidence: a 3-night log with a surviving Doctor stays normalized and non-negative throughout", () => {
+  // a larger config with citizens present, so the Doctor's living-target
+  // domain never shrinks to the degenerate single-forced-choice case
+  // exercised in the test above.
+  const config: GameConfig = {
+    players: ["1", "2", "3", "4"],
+    roles: ["doctor", "mafia", "citizen", "citizen"],
+  };
+  const setting: GameSetting = {
+    config,
+    roles: defaultRoleRegistry,
+    groups: defaultGroupRegistry,
+  };
+  const model = createNightResultHandler(createUniformActionModel(defaultRoleRegistry));
+  const likelihoodModel = createLikelihoodModel(createHandlers({ truthful: 0.9, false: 0.1 }), model);
+
+  const log: NightResultFact[] = [nightResult(1, []), nightResult(2, []), nightResult(3, [])];
+
+  const worlds = generateWorlds(config);
+  const steps = processEvidence(worlds, log, likelihoodModel, setting);
+
+  assert.equal(steps.length, log.length);
+  steps.forEach((step) => {
+    const total = step.posterior.reduce((sum, w) => sum + w.probability, 0);
+    assert.ok(Math.abs(total - 1) < 1e-9);
+    assert.ok(step.posterior.every((w) => w.probability >= 0));
+  });
 });

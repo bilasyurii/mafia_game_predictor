@@ -181,7 +181,7 @@ test("a day elimination fact holds only the round and eliminated players - no ro
   assert.ok(withRole);
 });
 
-test("a day elimination is not scored as Bayesian evidence yet", () => {
+test("a day elimination is validated against that day's votes, not scored as world-dependent evidence", () => {
   const model = createLikelihoodModel(createHandlers({ truthful: 0.5, false: 0.5 }));
   const ctx: EvidenceContext = {
     config: game,
@@ -191,8 +191,10 @@ test("a day elimination is not scored as Bayesian evidence yet", () => {
     history: [],
   };
   const [world] = generateWorlds(game);
+  // no preceding vote evidence to validate against - an ungrounded
+  // elimination fact throws rather than being silently accepted
   assert.throws(
     () => model.likelihood(day(1, ["2"]), world, ctx),
-    /dayElimination likelihood not implemented yet/
+    /dayElimination for round 1 has no preceding candidateVote or keepOrEliminateVote/
   );
 });

@@ -127,3 +127,86 @@ test("donCheckTargetProbability, commissionerCheckTargetProbability, doctorSaveT
   );
   assert.ok(Math.abs(total - 1) < 1e-9);
 });
+
+// --- history-aware Doctor consecutive-target exclusion ---
+
+test("doctorSaveTargetProbability excludes the previous target and renormalizes over the rest", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const living = ["1", "2", "3", "4", "5", "6"];
+  const history = { previousDoctorSaveTarget: "5" };
+
+  assert.equal(actionModel.doctorSaveTargetProbability("5", world, aliveAll, history), 0);
+  living
+    .filter((p) => p !== "5")
+    .forEach((target) => {
+      assert.ok(
+        Math.abs(
+          actionModel.doctorSaveTargetProbability(target, world, aliveAll, history) - 1 / 5
+        ) < 1e-15
+      );
+    });
+
+  const total = living.reduce(
+    (sum, target) => sum + actionModel.doctorSaveTargetProbability(target, world, aliveAll, history),
+    0
+  );
+  assert.ok(Math.abs(total - 1) < 1e-9);
+});
+
+test("probability() excludes the same hypothesis and renormalizes over the rest", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const hypotheses = enumerateHiddenNightActions(world, aliveAll, defaultRoleRegistry);
+  const history = { previousDoctorSaveTarget: "5" };
+
+  const excluded = hypotheses.filter((h) => h.doctorSaveTarget === "5");
+  const remaining = hypotheses.filter((h) => h.doctorSaveTarget !== "5");
+  assert.ok(excluded.length > 0 && remaining.length > 0);
+
+  excluded.forEach((h) => {
+    assert.equal(actionModel.probability(h, world, aliveAll, history), 0);
+  });
+
+  const total = remaining.reduce(
+    (sum, h) => sum + actionModel.probability(h, world, aliveAll, history),
+    0
+  );
+  assert.ok(Math.abs(total - 1) < 1e-9);
+});
+
+test("excluding a target who is no longer alive is a no-op (never a legal choice anyway)", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const aliveWithoutSix = { ...aliveAll, "6": false };
+  const history = { previousDoctorSaveTarget: "6" }; // "6" already dead tonight
+
+  const withoutExclusion = actionModel.doctorSaveTargetProbability("1", world, aliveWithoutSix, {});
+  const withExclusion = actionModel.doctorSaveTargetProbability("1", world, aliveWithoutSix, history);
+  assert.equal(withExclusion, withoutExclusion);
+});
+
+test("excluding a target when the Doctor isn't even alive tonight is a no-op", () => {
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const aliveWithoutDoctor = { ...aliveAll, "3": false };
+  const history = { previousDoctorSaveTarget: "5" };
+
+  // no doctorSaveTarget dimension exists at all; probability() must be
+  // unaffected by an exclusion that has nothing to apply to
+  const hypotheses = enumerateHiddenNightActions(world, aliveWithoutDoctor, defaultRoleRegistry);
+  const total = hypotheses.reduce(
+    (sum, h) => sum + actionModel.probability(h, world, aliveWithoutDoctor, history),
+    0
+  );
+  assert.ok(Math.abs(total - 1) < 1e-9);
+});
+
+test("a sole-survivor Doctor forced to repeat has probability exactly 0 - no legal target remains", () => {
+  const soleWorld: World = { probability: 1, roles: { "1": "doctor" } };
+  const soleAlive: AliveState = { "1": true };
+  const actionModel = createUniformActionModel(defaultRoleRegistry);
+  const history = { previousDoctorSaveTarget: "1" };
+
+  assert.equal(actionModel.doctorSaveTargetProbability("1", soleWorld, soleAlive, history), 0);
+  assert.equal(
+    actionModel.probability({ mafiaTargetChoices: {}, doctorSaveTarget: "1" }, soleWorld, soleAlive, history),
+    0
+  );
+});

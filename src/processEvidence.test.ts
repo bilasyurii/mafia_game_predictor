@@ -257,7 +257,7 @@ test("a handler that is not implemented yet throws through the processor instead
   );
   assert.throws(
     () => processEvidence(worlds, [claim(1, "1"), day(1, [])], realModel(), setting),
-    /dayElimination likelihood not implemented yet/
+    /dayElimination for round 1 has no preceding candidateVote or keepOrEliminateVote/
   );
   assert.throws(
     () => processEvidence(worlds, [vote(1, "3", ["2"])], realModel(), setting),

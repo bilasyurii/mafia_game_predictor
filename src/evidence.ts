@@ -3,6 +3,7 @@ import { RoleRegistry } from "./roles";
 import { GroupRegistry } from "./roleGroups";
 import { NightResultFact } from "./night";
 import type { DayEliminationFact } from "./facts";
+import { resolveDayElimination } from "./dayEliminationLikelihood";
 
 /**
  * Everything a likelihood computation might need beyond the observation and
@@ -91,9 +92,7 @@ export function createLikelihoodModel(
         return nightResultHandler(evidence, world, ctx);
       }
       if (evidence.type === "dayElimination") {
-        throw new Error(
-          `dayElimination likelihood not implemented yet (round=${evidence.round})`
-        );
+        return resolveDayElimination(evidence, world, ctx);
       }
       const handler = handlers[evidence.type] as ObservationHandler;
       return handler(evidence, world, ctx);
