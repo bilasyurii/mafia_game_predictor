@@ -205,12 +205,15 @@ export function resolveNight(
  * alive/mechanic checks. No behavioral logic: self-targeting is included
  * for every mechanic (nothing here says who would plausibly be chosen,
  * only who legally could be), and the doctor's cross-night "no repeat"
- * rule is deliberately NOT enforced - the previous night's real save
+ * rule is deliberately NOT enforced here - the previous night's real save
  * target is itself a hidden, marginalized-out quantity by the time a
- * later night is being enumerated, so there is no fact to enforce it
- * against. This is a documented v1 simplification, not an oversight; see
- * nightResultLikelihood.ts, which always resolves every hypothesis this
- * function produces against an empty NightHistoryContext.
+ * later night is being enumerated, so there is no single fact to enforce
+ * it against at enumeration time. This is a permanent division of
+ * responsibility, not a deferred feature: enumeration stays
+ * history-independent by design, and the constraint is enforced
+ * downstream instead, as a genuine belief-weighted probability - see
+ * nightResultLikelihood.ts's nightResultLikelihoodAcrossNights (which
+ * receives real, non-empty history) and actionModel.ts's docs.
  */
 export function enumerateHiddenNightActions(
   world: World,

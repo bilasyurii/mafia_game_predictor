@@ -14,6 +14,18 @@ export type MechanicId =
   | "checkIsMafia"
   | "protect";
 
+/**
+ * Every field below `mechanic` is descriptive metadata, not an executable
+ * spec: night.ts and uniformActionModel.ts hand-implement each mechanic's
+ * actual runtime behavior directly against its `mechanic` id (e.g.
+ * hasMechanic(..., "unanimousNightKill"), hasMechanic(..., "protect")),
+ * and never read targetsPlayer/usesPerGame/requiresTeamConsensus/
+ * noConsecutiveRepeatTarget. They document, for a human reader, the shape
+ * of behavior the hand-written code next to them is expected to implement -
+ * changing one of these values does not change any runtime behavior, and
+ * there is deliberately no generic engine that would make it do so (see
+ * the architecture-audit findings this comment was added from).
+ */
 export interface RoleMechanic {
   mechanic: MechanicId;
   targetsPlayer: boolean;

@@ -2,12 +2,17 @@ import { AliveState, PlayerId, World } from "./types";
 import { HiddenNightActions, NightHistoryContext } from "./night";
 
 /**
- * Scaffold only - no behavioral model yet, no numbers, no heuristics.
- * Will eventually answer: how plausible is this specific hidden-action
- * hypothesis, given the candidate world and everything currently public?
- * This is deliberately separate from resolveNight (which only computes
- * deterministic consequences, never plausibility) and from LikelihoodModel
- * (which scores public observations, not private choices).
+ * Answers: how plausible is this specific hidden-action hypothesis, given
+ * the candidate world, who's alive, and everything currently public
+ * (including - via `history` - the belief-relevant part of the prior
+ * night's own hidden actions)? createUniformActionModel is the current
+ * default implementation: a maximum-entropy "every legal choice is equally
+ * likely" null hypothesis, not a behavioral claim about how any role
+ * actually chooses targets - a genuine calibrated/behavioral ActionModel
+ * remains future work. This interface is deliberately separate from
+ * resolveNight (which only computes deterministic consequences, never
+ * plausibility) and from LikelihoodModel (which scores public observations,
+ * not private choices).
  */
 export interface ActionModel {
   probability(

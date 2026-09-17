@@ -6,7 +6,7 @@ import { initAliveState } from "./facts";
 import { formatProbability } from "./format";
 import { createLikelihoodModel, EvidenceContext } from "./evidence";
 import { createHandlers } from "./likelihoodHandlers";
-import { defaultRoleRegistry, validateGameConfig } from "./roles";
+import { defaultRoleRegistry } from "./roles";
 import { defaultGroupRegistry } from "./roleGroups";
 import { createNightResultHandler } from "./nightResultLikelihood";
 import { createUniformActionModel } from "./uniformActionModel";
@@ -25,8 +25,7 @@ const game: GameConfig = {
   ],
 };
 
-validateGameConfig(game, defaultRoleRegistry);
-
+// generateWorlds validates game against defaultRoleRegistry internally.
 const worlds = generateWorlds(game);
 
 console.log("total worlds:", worlds.length);

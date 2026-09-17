@@ -72,11 +72,14 @@ export type NightResultHandler = (
 /**
  * Builds a LikelihoodModel that dispatches on evidence.type: player
  * statements/behavior go to `handlers`, a night outcome goes to
- * `nightResultHandler`, and a day elimination is not scored yet. This function - and updateProbabilities(), which
- * calls it - never branches on a role name or evidence type beyond this
- * dispatch. Only the injected handlers may consult RoleRegistry, and only
- * ever generically (e.g. hasMechanic(ctx.roles, role, "checkIsMafia")),
- * never via a literal comparison like role === "commissioner".
+ * `nightResultHandler`, and a day elimination goes to resolveDayElimination
+ * (a deterministic consistency check against already-public vote evidence,
+ * not a per-world-varying likelihood - see dayEliminationLikelihood.ts).
+ * This function - and updateProbabilities(), which calls it - never
+ * branches on a role name or evidence type beyond this dispatch. Only the
+ * injected handlers may consult RoleRegistry, and only ever generically
+ * (e.g. hasMechanic(ctx.roles, role, "checkIsMafia")), never via a literal
+ * comparison like role === "commissioner".
  */
 export function createLikelihoodModel(
   handlers: ObservationHandlerMap,
