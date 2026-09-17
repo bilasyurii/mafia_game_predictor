@@ -212,6 +212,83 @@ test("sanity: uniform likelihood leaves the posterior identical to the prior", (
   });
 });
 
+test("sanity: scaling every world's likelihood by the same nonzero constant leaves the posterior unchanged", () => {
+  const worlds = generateWorlds(game);
+  const ctx = makeCtx();
+
+  // generalizes the constant-1 case above to a non-1 constant, so this
+  // actually proves cancellation happens via normalization (dividing by
+  // the total), not because 1 is treated as a special no-op value - this
+  // is exactly what makes DayEliminationFact's constant-1 contribution,
+  // and any other world-independent likelihood, provably a no-op
+  // regardless of which constant it happens to be.
+  const scaledHandlers: ObservationHandlerMap = {
+    selfRoleClaim: () => 7,
+    roleAssertion: notExercised,
+    investigationReport: notExercised,
+    candidateVote: notExercised,
+    keepOrEliminateVote: notExercised,
+    suspect: notExercised,
+    defend: notExercised,
+    nominate: notExercised,
+  };
+  const model = createLikelihoodModel(scaledHandlers);
+
+  const posteriorWorlds = updateProbabilities(
+    worlds,
+    {
+      type: "selfRoleClaim",
+      round: 1,
+      actor: "1",
+      claim: { kind: "role", role: "commissioner" },
+    },
+    model,
+    ctx
+  );
+
+  worlds.forEach((prior, i) => {
+    assert.ok(
+      Math.abs(prior.probability - posteriorWorlds[i].probability) < 1e-12
+    );
+  });
+});
+
+test("repeated identical evidence compounds odds multiplicatively, as conditional independence given the world implies", () => {
+  const worlds = generateWorlds(game);
+  const ctx = makeCtx();
+  const model = createLikelihoodModel(syntheticSelfClaimHandlers);
+  const claim = {
+    type: "selfRoleClaim" as const,
+    round: 1,
+    actor: "1",
+    claim: { kind: "role" as const, role: "commissioner" as const },
+  };
+
+  const once = updateProbabilities(worlds, claim, model, ctx);
+  const twice = updateProbabilities(once, claim, model, ctx);
+
+  const oddsOf = (p: number) => p / (1 - p);
+  const pOnce = getProbability(once, "1", "commissioner");
+  const pTwice = getProbability(twice, "1", "commissioner");
+
+  // the current model treats sequential evidence as independent factors
+  // given the world (see updateProbabilities.ts's doc and this session's
+  // model-coherence audit) - so a second, identical observation must move
+  // the ODDS by exactly the same multiplicative factor (the likelihood
+  // ratio) as the first one did, not some smaller "diminishing returns"
+  // amount - there is no actor-repetition memory anywhere in this model.
+  const likelihoodRatio = oddsOf(pOnce) / oddsOf(0.125);
+  const expectedOddsTwice = oddsOf(pOnce) * likelihoodRatio;
+  const expectedPTwice = expectedOddsTwice / (1 + expectedOddsTwice);
+
+  assert.ok(
+    Math.abs(pTwice - expectedPTwice) < 1e-9,
+    `pTwice=${pTwice}, expected=${expectedPTwice}`
+  );
+  // concretely, for this handler's 0.9/0.1 ratio from a 1/8 prior: 81/88
+  assert.ok(Math.abs(pTwice - 81 / 88) < 1e-9, `pTwice=${pTwice}`);
+});
+
 test("sanity: a 1/0 hard-split likelihood fully filters out the excluded worlds", () => {
   const worlds = generateWorlds(game);
   const ctx = makeCtx();
