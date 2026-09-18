@@ -10,7 +10,6 @@ import { GameSetting, processEvidence } from "../processEvidence";
 import { createBehavioralLikelihoodModel, defaultBehavioralModelParams } from "../behavioralModel";
 import { runSimulation } from "./driver";
 import { createClaudeCliAgent } from "./claudeCliAgent";
-import { formatPromptText } from "./playerView";
 import { PublicGameStateView, SimulationAgent, SimulationDecisionRequest, SimulationOutput } from "./types";
 
 /**
@@ -137,6 +136,48 @@ export interface RunOneGameOptions {
   /** Prepended to every per-decision START/DONE/FAILED log line - useful to tell games apart in a multi-game run. */
   logPrefix?: string;
   maxRounds?: number;
+}
+
+/**
+ * Heuristic post-hoc check that no sent request's PublicGameStateView leaked
+ * information a real player in that seat wouldn't legitimately have. Only
+ * `view.private` is scanned for another player's true role: `publicHistory`
+ * is intentionally identical for every player and may legitimately contain
+ * ANY role name via a public `selfRoleClaim` (a player may truthfully or
+ * falsely claim to be any role - that's in-character bluffing, not a leak,
+ * and once claimed it's public knowledge for the rest of the game). Scanning
+ * the whole serialized view (as an earlier version of this check did)
+ * produces false positives every time any player makes a public role claim -
+ * confirmed against the 10-game synthetic experiment, where 9/10 games
+ * "failed" this check purely because of legitimate public bluffing. The
+ * actual information boundary is enforced by construction in
+ * playerView.ts's buildPlayerView (see playerView.test.ts) - this is only a
+ * secondary sanity net over the real requests a run actually sent.
+ */
+export function checkInformationBoundary(
+  config: GameConfig,
+  groundTruthRoles: Record<string, string>,
+  sentViews: PublicGameStateView[]
+): string[] {
+  const violations: string[] = [];
+  sentViews.forEach((view, i) => {
+    const serializedPrivate = JSON.stringify(view.private);
+    const trueRole = groundTruthRoles[view.self];
+    const actorTeam = teamOf(groundTruthRoles, view.self);
+    config.players.forEach((other) => {
+      if (other === view.self) return;
+      const otherRole = groundTruthRoles[other];
+      const otherTeam = teamOf(groundTruthRoles, other);
+      const legitimatelyKnown = actorTeam === "mafia" && otherTeam === "mafia";
+      if (!legitimatelyKnown && serializedPrivate.includes(`"${otherRole}"`) && otherRole !== trueRole) {
+        violations.push(`request #${i} (self=${view.self}) may reference role "${otherRole}" of "${other}" in private knowledge`);
+      }
+    });
+    if (actorTeam !== "mafia" && view.private.teammates !== undefined) {
+      violations.push(`request #${i}: non-Mafia player ${view.self} was given a "teammates" field`);
+    }
+  });
+  return violations;
 }
 
 function computeBehavioralStats(config: GameConfig, output: SimulationOutput): BehavioralStats {
@@ -304,24 +345,7 @@ export async function runOneGame(options: RunOneGameOptions): Promise<GameRunRes
   const totalWallClockMs = Date.now() - gameStartedAt;
 
   // ---- Information-boundary validation, against the REAL requests actually sent ----
-  const boundaryViolations: string[] = [];
-  sentViews.forEach((view, i) => {
-    const serialized = formatPromptText(view);
-    const trueRole = output.groundTruth.roles[view.self];
-    const actorTeam = teamOf(output.groundTruth.roles, view.self);
-    config.players.forEach((other) => {
-      if (other === view.self) return;
-      const otherRole = output.groundTruth.roles[other];
-      const otherTeam = teamOf(output.groundTruth.roles, other);
-      const legitimatelyKnown = actorTeam === "mafia" && otherTeam === "mafia";
-      if (!legitimatelyKnown && serialized.includes(`"${otherRole}"`) && otherRole !== trueRole) {
-        boundaryViolations.push(`request #${i} (self=${view.self}) may reference role "${otherRole}" of "${other}"`);
-      }
-    });
-    if (actorTeam !== "mafia" && view.private.teammates !== undefined) {
-      boundaryViolations.push(`request #${i}: non-Mafia player ${view.self} was given a "teammates" field`);
-    }
-  });
+  const boundaryViolations = checkInformationBoundary(config, output.groundTruth.roles, sentViews);
 
   // ---- Rule/infrastructure sanity: replay through the existing predictor pipeline ----
   let replayOk = false;
