@@ -144,6 +144,11 @@ export type SimulationDecisionRequest =
 export interface AgentUsage {
   inputTokens?: number;
   outputTokens?: number;
+  /** Only present when the provider actually reports prompt-cache usage - never invented. */
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  /** Only present when the provider reports an actual measured dollar cost for this call (e.g. claude -p's total_cost_usd) - never recomputed/estimated here. */
+  costUsd?: number;
 }
 
 export interface AgentResponse {
@@ -185,6 +190,10 @@ export interface SimulationStats {
   /** Only summed from AgentResponse.usage when a call actually reported it - never invented. */
   totalInputTokens?: number;
   totalOutputTokens?: number;
+  totalCacheCreationInputTokens?: number;
+  totalCacheReadInputTokens?: number;
+  /** Sum of every AgentUsage.costUsd actually reported - never estimated from token counts here. */
+  totalCostUsd?: number;
   callsWithReportedUsage: number;
 }
 

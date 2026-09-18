@@ -150,17 +150,33 @@ export async function runSimulation(config: GameConfig, options: RunSimulationOp
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       stats.llmCalls += 1;
       stats.decisionsByRequestKind[request.kind] = (stats.decisionsByRequestKind[request.kind] ?? 0) + 1;
-      const response = await options.agent.decide(request);
-      if (response.usage) {
-        stats.callsWithReportedUsage += 1;
-        if (response.usage.inputTokens !== undefined) {
-          stats.totalInputTokens = (stats.totalInputTokens ?? 0) + response.usage.inputTokens;
-        }
-        if (response.usage.outputTokens !== undefined) {
-          stats.totalOutputTokens = (stats.totalOutputTokens ?? 0) + response.usage.outputTokens;
-        }
-      }
       try {
+        // The agent call itself belongs inside this try: a real provider can fail by
+        // throwing (network error, malformed JSON it couldn't parse into a decision at
+        // all) just as easily as by returning a well-formed-but-illegal decision - both
+        // are equally "an invalid response" and must go through the same bounded retry,
+        // never crash the whole simulation on the first bad call.
+        const response = await options.agent.decide(request);
+        if (response.usage) {
+          stats.callsWithReportedUsage += 1;
+          if (response.usage.inputTokens !== undefined) {
+            stats.totalInputTokens = (stats.totalInputTokens ?? 0) + response.usage.inputTokens;
+          }
+          if (response.usage.outputTokens !== undefined) {
+            stats.totalOutputTokens = (stats.totalOutputTokens ?? 0) + response.usage.outputTokens;
+          }
+          if (response.usage.cacheCreationInputTokens !== undefined) {
+            stats.totalCacheCreationInputTokens =
+              (stats.totalCacheCreationInputTokens ?? 0) + response.usage.cacheCreationInputTokens;
+          }
+          if (response.usage.cacheReadInputTokens !== undefined) {
+            stats.totalCacheReadInputTokens =
+              (stats.totalCacheReadInputTokens ?? 0) + response.usage.cacheReadInputTokens;
+          }
+          if (response.usage.costUsd !== undefined) {
+            stats.totalCostUsd = (stats.totalCostUsd ?? 0) + response.usage.costUsd;
+          }
+        }
         validateDecisionForRequest(request, response.decision, aliveNow, forbiddenDoctorTarget);
         return response.decision;
       } catch (err) {
