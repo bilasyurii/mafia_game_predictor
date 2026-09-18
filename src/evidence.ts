@@ -94,6 +94,28 @@ export type NightResultHandler = (
  * so a player who is only eliminated later THIS SAME phase (e.g. "last
  * words" spoken right after one's own day elimination) is still correctly
  * alive here and unaffected by this check.
+ *
+ * `behavioralEvidenceWeight` (default 1, reproducing prior behavior
+ * exactly) tempers ONLY the `handlers` branch - every Observation type
+ * (selfRoleClaim/roleAssertion/investigationReport/suspect/defend/nominate/
+ * candidateVote/keepOrEliminateVote), i.e. everything actually configured
+ * by a BehavioralModelParams. `nightResultHandler` (built from an
+ * ActionModel, never from BehavioralModelParams) and resolveDayElimination
+ * (always exactly 1, a pure consistency check) are NEVER tempered - this is
+ * the single dispatch point that already distinguishes behavioral from
+ * mechanical evidence, so applying the weight here (rather than inside each
+ * of the eight handler factories) can never accidentally touch mechanical
+ * evidence. The transform is `L_tempered = L ** behavioralEvidenceWeight`,
+ * applied to the raw per-world likelihood BEFORE updateProbabilities'
+ * prior-multiply-and-renormalize step - so Bayesian normalization stays
+ * exact, and a weight-produced world-independent constant (weight=0 makes
+ * every world's tempered likelihood exactly 1, regardless of the raw
+ * value) cancels in the renormalization exactly as
+ * updateProbabilities.ts's own "Identifiability note" already documents for
+ * any other world-independent constant. Note: `x ** 0 === 1` even for
+ * x === 0 (a JS/IEEE754 quirk) - harmless with every currently-configured
+ * BehavioralModelParams (none produce a literal 0 likelihood), but worth
+ * knowing if a future params set ever did.
  */
 export function createLikelihoodModel(
   handlers: ObservationHandlerMap,
@@ -101,7 +123,8 @@ export function createLikelihoodModel(
     throw new Error(
       "nightResult likelihood not implemented yet - requires a calibrated ActionModel"
     );
-  }
+  },
+  behavioralEvidenceWeight: number = 1
 ): LikelihoodModel {
   return {
     likelihood(evidence, world, ctx) {
@@ -115,7 +138,8 @@ export function createLikelihoodModel(
         assertAlive(ctx.alive, evidence.actor);
       }
       const handler = handlers[evidence.type] as ObservationHandler;
-      return handler(evidence, world, ctx);
+      const raw = handler(evidence, world, ctx);
+      return behavioralEvidenceWeight === 1 ? raw : raw ** behavioralEvidenceWeight;
     },
   };
 }

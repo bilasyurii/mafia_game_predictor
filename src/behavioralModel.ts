@@ -364,10 +364,24 @@ export function createBehavioralHandlers(params: BehavioralModelParams): Observa
  * default; see this file's top-of-file doc for why NightResult is
  * deliberately untouched by this milestone). This is the one function a
  * caller replaying a real game needs to get a working end-to-end model.
+ *
+ * `behavioralEvidenceWeight` (default 1, reproducing prior behavior
+ * exactly) is passed straight through to createLikelihoodModel - see its
+ * own doc for the exact tempering transform and why it can only ever touch
+ * behavioral (BehavioralModelParams-configured) evidence, never
+ * nightResult/dayElimination. Does not modify `params` itself, so the same
+ * BehavioralModelParams object (defaultBehavioralModelParams,
+ * syntheticBehavioralModelParams, or any other) can be reused at any
+ * weight without being copied or mutated.
  */
 export function createBehavioralLikelihoodModel(
   params: BehavioralModelParams,
-  actionModel: ActionModel = createUniformActionModel(defaultRoleRegistry)
+  actionModel: ActionModel = createUniformActionModel(defaultRoleRegistry),
+  behavioralEvidenceWeight: number = 1
 ): LikelihoodModel {
-  return createLikelihoodModel(createBehavioralHandlers(params), createNightResultHandler(actionModel));
+  return createLikelihoodModel(
+    createBehavioralHandlers(params),
+    createNightResultHandler(actionModel),
+    behavioralEvidenceWeight
+  );
 }

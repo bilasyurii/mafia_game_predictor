@@ -180,7 +180,7 @@ export function checkInformationBoundary(
   return violations;
 }
 
-function computeBehavioralStats(config: GameConfig, output: SimulationOutput): BehavioralStats {
+export function computeBehavioralStats(config: GameConfig, output: SimulationOutput): BehavioralStats {
   const emptyBucket = (): TeamBucket => ({ townToMafia: 0, townToTown: 0, mafiaToMafia: 0, mafiaToTown: 0 });
   const suspectCounts = emptyBucket();
   const defendCounts = emptyBucket();

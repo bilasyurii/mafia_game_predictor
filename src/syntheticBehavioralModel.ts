@@ -48,9 +48,9 @@ import { BehavioralModelParams, defaultBehavioralModelParams } from "./behaviora
  * stay comparable across parameters - a stronger/weaker kappa is a
  * reasonable future adjustment, not a claim that 10 is uniquely correct.
  */
-const SMOOTHING_PSEUDO_COUNT = 10;
+export const SMOOTHING_PSEUDO_COUNT = 10;
 
-function smoothedSplit(counts: number[]): number[] {
+export function smoothedSplit(counts: number[]): number[] {
   const total = counts.reduce((a, b) => a + b, 0);
   const perCategory = SMOOTHING_PSEUDO_COUNT / counts.length;
   return counts.map((c) => (c + perCategory) / (total + SMOOTHING_PSEUDO_COUNT));
