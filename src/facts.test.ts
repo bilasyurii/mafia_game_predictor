@@ -1,19 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CandidateVote, GameConfig, RoleId } from "./types";
-import { NightResultFact } from "./night";
-import { createLikelihoodModel, Evidence, EvidenceContext } from "./evidence";
-import {
-  DayEliminationFact,
-  getAliveStateAt,
-  getAliveStateForVote,
-  initAliveState,
-} from "./facts";
+import { CandidateVote, DayEliminationFact, GameConfig, GameEvent, NightResultFact, RoleId } from "./types";
+import { getAliveStateAt, getAliveStateForVote, initAliveState } from "./facts";
 import { resolveCandidateVote, tallyCandidateVote, validateCandidateVote } from "./voting";
-import { generateWorlds } from "./generateWorlds";
-import { createHandlers } from "./likelihoodHandlers";
-import { defaultRoleRegistry } from "./roles";
-import { defaultGroupRegistry } from "./roleGroups";
 
 const game: GameConfig = {
   players: ["1", "2", "3", "4", "5", "6", "7", "8"],
@@ -41,7 +30,7 @@ const day = (round: number, eliminated: string[]): DayEliminationFact => ({
   eliminated,
 });
 
-function deadPlayers(history: Evidence[], at: Parameters<typeof getAliveStateAt>[2]): string[] {
+function deadPlayers(history: GameEvent[], at: Parameters<typeof getAliveStateAt>[2]): string[] {
   const alive = getAliveStateAt(game, history, at);
   return Object.keys(alive).filter((p) => !alive[p]);
 }
@@ -52,25 +41,25 @@ test("before any night, everyone is alive", () => {
 });
 
 test("a night death changes the alive state for the following day's vote", () => {
-  const history: Evidence[] = [night(1, ["5"])];
+  const history: GameEvent[] = [night(1, ["5"])];
   assert.deepEqual(deadPlayers(history, { phase: "night", round: 1 }), []);
   assert.deepEqual(deadPlayers(history, { phase: "day", round: 1 }), ["5"]);
 });
 
 test("a day elimination changes the alive state for the following night, not for its own day", () => {
-  const history: Evidence[] = [night(1, []), day(1, ["2"])];
+  const history: GameEvent[] = [night(1, []), day(1, ["2"])];
   assert.deepEqual(deadPlayers(history, { phase: "day", round: 1 }), []);
   assert.deepEqual(deadPlayers(history, { phase: "night", round: 2 }), ["2"]);
 });
 
 test("multiple night deaths in one night and across nights are all applied", () => {
-  const history: Evidence[] = [night(1, ["4", "7"]), day(1, []), night(2, ["1"])];
+  const history: GameEvent[] = [night(1, ["4", "7"]), day(1, []), night(2, ["1"])];
   assert.deepEqual(deadPlayers(history, { phase: "day", round: 1 }), ["4", "7"]);
   assert.deepEqual(deadPlayers(history, { phase: "day", round: 2 }), ["1", "4", "7"]);
 });
 
 test("multiple day eliminations - all tied candidates in one day, and across days - are all applied", () => {
-  const history: Evidence[] = [
+  const history: GameEvent[] = [
     night(1, []),
     day(1, ["2", "6"]), // keep/eliminate vote eliminated both tied candidates
     night(2, []),
@@ -81,8 +70,8 @@ test("multiple day eliminations - all tied candidates in one day, and across day
 });
 
 test("replay uses each fact's round, not its position in history", () => {
-  const ordered: Evidence[] = [night(1, ["4"]), day(1, ["2"]), night(2, ["7"])];
-  const shuffled: Evidence[] = [night(2, ["7"]), day(1, ["2"]), night(1, ["4"])];
+  const ordered: GameEvent[] = [night(1, ["4"]), day(1, ["2"]), night(2, ["7"])];
+  const shuffled: GameEvent[] = [night(2, ["7"]), day(1, ["2"]), night(1, ["4"])];
   assert.deepEqual(
     getAliveStateAt(game, shuffled, { phase: "day", round: 2 }),
     getAliveStateAt(game, ordered, { phase: "day", round: 2 })
@@ -98,7 +87,7 @@ test("a historical vote is interpreted with the alive state of its own day, not 
     handsRaised: { "3": ["5", "1"] },
   };
   // "5" voted on day 1, then died on night 2; "8" died on night 1
-  const history: Evidence[] = [night(1, ["8"]), vote, day(1, ["3"]), night(2, ["5"])];
+  const history: GameEvent[] = [night(1, ["8"]), vote, day(1, ["3"]), night(2, ["5"])];
 
   // today, both candidate "3" and voter "5" are dead, so the old vote would
   // be rejected as impossible
@@ -118,7 +107,7 @@ test("a historical vote is interpreted with the alive state of its own day, not 
 });
 
 test("dead players are never reconstructed as alive, and cannot die twice", () => {
-  const history: Evidence[] = [night(1, ["5"]), day(1, []), night(2, []), day(2, [])];
+  const history: GameEvent[] = [night(1, ["5"]), day(1, []), night(2, []), day(2, [])];
   [
     { phase: "day", round: 1 },
     { phase: "night", round: 2 },
@@ -152,7 +141,7 @@ test("inconsistent histories and invalid points are rejected", () => {
 });
 
 test("state reconstruction does not mutate the history or its facts", () => {
-  const history: Evidence[] = [night(1, ["4", "7"]), day(1, ["2"]), night(2, ["1"])];
+  const history: GameEvent[] = [night(1, ["4", "7"]), day(1, ["2"]), night(2, ["1"])];
   const snapshot = JSON.stringify(history);
 
   const first = getAliveStateAt(game, history, { phase: "day", round: 2 });
@@ -170,31 +159,4 @@ test("a day elimination fact holds only the round and eliminated players - no ro
   assert.deepEqual(Object.keys(fact).sort(), ["eliminated", "round", "type"]);
   const serialized = JSON.stringify(fact);
   ROLE_IDS.forEach((role) => assert.ok(!serialized.includes(`"${role}"`)));
-
-  const withRole: DayEliminationFact = {
-    type: "dayElimination",
-    round: 3,
-    eliminated: ["2"],
-    // @ts-expect-error - an elimination never reveals a role
-    role: "mafia",
-  };
-  assert.ok(withRole);
-});
-
-test("a day elimination is validated against that day's votes, not scored as world-dependent evidence", () => {
-  const model = createLikelihoodModel(createHandlers({ truthful: 0.5, false: 0.5 }));
-  const ctx: EvidenceContext = {
-    config: game,
-    roles: defaultRoleRegistry,
-    groups: defaultGroupRegistry,
-    alive: initAliveState(game),
-    history: [],
-  };
-  const [world] = generateWorlds(game);
-  // no preceding vote evidence to validate against - an ungrounded
-  // elimination fact throws rather than being silently accepted
-  assert.throws(
-    () => model.likelihood(day(1, ["2"]), world, ctx),
-    /dayElimination for round 1 has no preceding candidateVote or keepOrEliminateVote/
-  );
 });

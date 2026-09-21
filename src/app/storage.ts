@@ -30,7 +30,7 @@ export class InMemoryStorageAdapter implements StorageAdapter {
 }
 
 export const APP_STATE_STORAGE_KEY = "mafiaPredictor.appState";
-export const CURRENT_APP_VERSION = "0.1.0";
+export const CURRENT_APP_VERSION = "2.0.0";
 
 function emptyAppState(): AppState {
   return { schemaVersion: APP_SCHEMA_VERSION, appVersion: CURRENT_APP_VERSION, currentGame: null, history: [] };

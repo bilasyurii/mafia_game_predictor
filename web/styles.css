@@ -237,10 +237,12 @@ body {
   gap: 2px;
   width: 64px;
   cursor: pointer;
+  touch-action: none;
+  user-select: none;
 }
 
 .player-node-me {
-  cursor: default;
+  cursor: grab;
 }
 
 .player-icon {
@@ -250,6 +252,16 @@ body {
 
 .player-node-dead .player-icon {
   opacity: 0.6;
+}
+
+.player-node-confirmed-mafia .player-icon {
+  box-shadow: 0 0 0 3px var(--mafia);
+  border-radius: 50%;
+}
+
+.player-node-confirmed-town .player-icon {
+  box-shadow: 0 0 0 3px var(--town);
+  border-radius: 50%;
 }
 
 .player-number {
@@ -266,39 +278,106 @@ body {
   font-weight: 700;
 }
 
-.prob-bar {
-  position: relative;
-  width: 12px;
-  height: 44px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
+/* ---- relationship arrows ---- */
 
-.prob-bar::after {
-  content: "";
+.arrows-svg {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  background: var(--border);
-}
-
-.prob-bar-fill {
-  position: absolute;
-  left: 0;
-  right: 0;
+  inset: 0;
   width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
-.prob-bar-fill.prob-bar-town {
-  background: var(--town);
+.arrow-line {
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
 }
 
-.prob-bar-fill.prob-bar-mafia {
-  background: var(--mafia);
+.arrow-attack {
+  stroke: var(--mafia);
+}
+
+.arrow-support {
+  stroke: var(--town);
+}
+
+.arrow-dim {
+  opacity: 0.12;
+}
+
+.arrow-solid {
+  opacity: 1;
+  stroke-width: 3px;
+}
+
+.arrowhead-attack {
+  fill: var(--mafia);
+}
+
+.arrowhead-support {
+  fill: var(--town);
+}
+
+/* ---- drag-to-act gesture ---- */
+
+.center-drop-target {
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  pointer-events: auto;
+}
+
+.drop-hover {
+  outline: 3px solid #ffffff;
+  border-radius: 50%;
+}
+
+.drag-ghost {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 50;
+  font-size: 1.8rem;
+  opacity: 0.85;
+}
+
+/* ---- detected-teams panel ---- */
+
+.team-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-chip {
+  white-space: nowrap;
+}
+
+/* ---- action intensity (star picker) ---- */
+
+.star-picker {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.star-btn {
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 8px 10px;
+  min-height: 44px;
+  color: var(--muted);
+}
+
+.star-btn-filled {
+  color: #f5b301;
+}
+
+.confirmed-banner {
+  font-weight: 700;
+  text-align: center;
 }
 
 /* ---- selection grids (death entry, voting) ---- */

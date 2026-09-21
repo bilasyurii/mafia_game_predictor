@@ -86,9 +86,6 @@
   function hasMechanic(registry, role, mechanic) {
     return registry[role].mechanics.some((m) => m.mechanic === mechanic);
   }
-  function sameTeam(registry, a, b) {
-    return registry[a].team === registry[b].team;
-  }
   function validateGameConfig(config, registry) {
     const counts = /* @__PURE__ */ new Map();
     config.roles.forEach((role) => {
@@ -101,78 +98,6 @@
     }
   }
 
-  // src/roleGroups.ts
-  function satisfiedBy(expr, actualRole, groups) {
-    if (expr.kind === "role") {
-      return actualRole === expr.role;
-    }
-    if (!groups) {
-      throw new Error(
-        `Cannot evaluate group expression "${expr.group}" without a GroupRegistry`
-      );
-    }
-    return groups[expr.group].includes(actualRole);
-  }
-  function buildGroupRegistry(roles, customGroups) {
-    const byTeam = {};
-    Object.keys(roles).forEach((roleId) => {
-      const team = roles[roleId].team;
-      byTeam[team] = [...byTeam[team] ?? [], roleId];
-    });
-    return {
-      mafia: byTeam.mafia ?? [],
-      town: byTeam.town ?? [],
-      ...customGroups
-    };
-  }
-  var defaultGroupRegistry = buildGroupRegistry(
-    defaultRoleRegistry,
-    { activeTown: ["doctor", "commissioner"] }
-  );
-
-  // src/generateWorlds.ts
-  function generateWorlds(config, registry = defaultRoleRegistry) {
-    validateGameConfig(config, registry);
-    const { players, roles } = config;
-    if (players.length !== roles.length) {
-      throw new Error(
-        `players.length (${players.length}) must equal roles.length (${roles.length})`
-      );
-    }
-    const roleAssignments = distinctPermutations(roles);
-    const probability = 1 / roleAssignments.length;
-    return roleAssignments.map((assignment) => {
-      const worldRoles = {};
-      players.forEach((player, i) => {
-        worldRoles[player] = assignment[i];
-      });
-      return { roles: worldRoles, probability };
-    });
-  }
-  function distinctPermutations(items) {
-    const sorted = [...items].sort();
-    const results = [];
-    const used = new Array(sorted.length).fill(false);
-    const current = [];
-    function backtrack() {
-      if (current.length === sorted.length) {
-        results.push([...current]);
-        return;
-      }
-      for (let i = 0; i < sorted.length; i++) {
-        if (used[i]) continue;
-        if (i > 0 && sorted[i] === sorted[i - 1] && !used[i - 1]) continue;
-        used[i] = true;
-        current.push(sorted[i]);
-        backtrack();
-        current.pop();
-        used[i] = false;
-      }
-    }
-    backtrack();
-    return results;
-  }
-
   // src/facts.ts
   function initAliveState(config) {
     const state = {};
@@ -183,121 +108,6 @@
   }
   function markDead(state, player) {
     return { ...state, [player]: false };
-  }
-  function isAlive(state, player) {
-    return state[player];
-  }
-  function assertAlive(state, player) {
-    if (!isAlive(state, player)) {
-      throw new Error(`${player} is dead and cannot produce new observations`);
-    }
-  }
-  function phaseIndex({ phase, round }) {
-    return phase === "night" ? 2 * round - 1 : 2 * round;
-  }
-  function assertValidPhase({ phase, round }) {
-    if (!Number.isInteger(round) || round < (phase === "night" ? 1 : 0)) {
-      throw new Error(`invalid ${phase} round ${round}`);
-    }
-  }
-  function getPhaseOf(evidence) {
-    const phase = evidence.type === "nightResult" ? { phase: "night", round: evidence.round } : { phase: "day", round: evidence.round };
-    assertValidPhase(phase);
-    if (evidence.type === "investigationReport" && evidence.night !== void 0) {
-      const { night, round } = evidence;
-      if (!Number.isInteger(night) || night < 1 || night > round) {
-        throw new Error(
-          `invalid investigationReport night ${night} for a report on day ${round}`
-        );
-      }
-    }
-    return phase;
-  }
-  function getAliveStateAt(config, history, at) {
-    assertValidPhase(at);
-    const target = phaseIndex(at);
-    const deathsByPhase = /* @__PURE__ */ new Map();
-    history.forEach((event) => {
-      if (event.type !== "nightResult" && event.type !== "dayElimination") {
-        return;
-      }
-      const index = phaseIndex(getPhaseOf(event));
-      if (deathsByPhase.has(index)) {
-        throw new Error(`more than one ${event.type} fact for round ${event.round}`);
-      }
-      deathsByPhase.set(
-        index,
-        event.type === "nightResult" ? event.died : event.eliminated
-      );
-    });
-    let alive = initAliveState(config);
-    [...deathsByPhase.keys()].filter((index) => index < target).sort((a, b) => a - b).forEach((index) => {
-      deathsByPhase.get(index).forEach((player) => {
-        if (alive[player] === void 0) {
-          throw new Error(`unknown player "${player}" in a death fact`);
-        }
-        if (!alive[player]) {
-          throw new Error(`player "${player}" died but was already dead`);
-        }
-        alive = markDead(alive, player);
-      });
-    });
-    return alive;
-  }
-  function getAliveStateForEvidence(config, history, evidence) {
-    return getAliveStateAt(config, history, getPhaseOf(evidence));
-  }
-  function getHistoryBefore(history, index) {
-    if (!Number.isInteger(index) || index < 0 || index >= history.length) {
-      throw new Error(`history index ${index} is out of range`);
-    }
-    const current = getPhaseOf(history[index]);
-    const before = history.slice(0, index);
-    before.forEach((event, i) => {
-      const phase = getPhaseOf(event);
-      if (phaseIndex(phase) > phaseIndex(current)) {
-        throw new Error(
-          `history[${i}] (${event.type}, ${phase.phase} ${phase.round}) is recorded before history[${index}] (${history[index].type}, ${current.phase} ${current.round}) but belongs to a later phase`
-        );
-      }
-    });
-    return before;
-  }
-
-  // src/updateProbabilities.ts
-  function updateProbabilities(worlds, evidence, model, ctx) {
-    const weighted = worlds.map((world) => ({
-      ...world,
-      probability: world.probability * model.likelihood(evidence, world, ctx)
-    }));
-    const total = weighted.reduce((sum, world) => sum + world.probability, 0);
-    if (total === 0) {
-      throw new Error(
-        "Observation is inconsistent with every remaining world (total likelihood is 0)"
-      );
-    }
-    return weighted.map((world) => ({
-      ...world,
-      probability: world.probability / total
-    }));
-  }
-
-  // src/processEvidence.ts
-  function processEvidence(worlds, history, model, setting) {
-    const steps = [];
-    let prior = worlds;
-    history.forEach((evidence, index) => {
-      const before = getHistoryBefore(history, index);
-      const context = {
-        ...setting,
-        alive: getAliveStateForEvidence(setting.config, before, evidence),
-        history: before
-      };
-      const posterior = updateProbabilities(prior, evidence, model, context);
-      steps.push({ index, evidence, context, prior, posterior });
-      prior = posterior;
-    });
-    return steps;
   }
 
   // src/voting.ts
@@ -398,7 +208,7 @@
     };
   }
 
-  // src/dayEliminationLikelihood.ts
+  // src/dayEliminationValidation.ts
   function sameEliminatedSet(a, b) {
     const setA = new Set(a);
     const setB = new Set(b);
@@ -418,27 +228,19 @@
     const subject = vote.type === "candidateVote" ? vote.stage === "initial" ? `round ${vote.round}'s initial vote` : `round ${vote.round}'s revote` : `round ${vote.round}'s keepOrEliminateVote`;
     if (requiredKind === "none") {
       if (precedingSameRoundVote !== void 0) {
-        throw new Error(
-          `${subject} must be the first vote of its round, but a vote event already precedes it in round ${vote.round}`
-        );
+        throw new Error(`${subject} must be the first vote of its round, but a vote event already precedes it in round ${vote.round}`);
       }
       return;
     }
     if (precedingSameRoundVote === void 0 || precedingSameRoundVote.type !== "candidateVote" || precedingSameRoundVote.stage !== requiredKind) {
-      throw new Error(
-        `${subject} must immediately follow a ${requiredKind} candidateVote of the same round`
-      );
+      throw new Error(`${subject} must immediately follow a ${requiredKind} candidateVote of the same round`);
     }
     const outcome = resolveCandidateVote(precedingSameRoundVote, alive);
     if (outcome.kind !== "tie") {
-      throw new Error(
-        `${subject} must follow a tie, but its preceding ${requiredKind} vote had a unique winner ("${outcome.candidate}")`
-      );
+      throw new Error(`${subject} must follow a tie, but its preceding ${requiredKind} vote had a unique winner ("${outcome.candidate}")`);
     }
     if (!sameEliminatedSet(outcome.candidates, vote.candidates)) {
-      throw new Error(
-        `${subject}'s candidates [${vote.candidates.join(", ")}] do not match the preceding tie [${outcome.candidates.join(", ")}]`
-      );
+      throw new Error(`${subject}'s candidates [${vote.candidates.join(", ")}] do not match the preceding tie [${outcome.candidates.join(", ")}]`);
     }
   }
   function expectedElimination(vote, alive) {
@@ -446,9 +248,7 @@
       const outcome2 = resolveCandidateVote(vote, alive);
       if (outcome2.kind === "tie") {
         throw new Error(
-          `round ${vote.round}'s last recorded vote (stage=${vote.stage}) ended in a tie among [${outcome2.candidates.join(
-            ", "
-          )}] with no revote or keep-or-eliminate vote recorded to resolve it`
+          `round ${vote.round}'s last recorded vote (stage=${vote.stage}) ended in a tie among [${outcome2.candidates.join(", ")}] with no revote or keep-or-eliminate vote recorded to resolve it`
         );
       }
       return [outcome2.candidate];
@@ -456,905 +256,196 @@
     const outcome = resolveKeepOrEliminateVote(vote, alive);
     return outcome.kind === "eliminateAll" ? [...outcome.candidates] : [];
   }
-  function resolveDayElimination(fact, _world, ctx) {
-    const dayVotes = ctx.history.filter(
-      (event) => (event.type === "candidateVote" || event.type === "keepOrEliminateVote") && event.round === fact.round
-    );
+  function validateDayElimination(fact, history, alive) {
+    const dayVotes = history.filter((event) => event.round === fact.round);
     if (dayVotes.length === 0) {
-      throw new Error(
-        `dayElimination for round ${fact.round} has no preceding candidateVote or keepOrEliminateVote to validate against`
-      );
+      throw new Error(`dayElimination for round ${fact.round} has no preceding candidateVote or keepOrEliminateVote to validate against`);
     }
-    dayVotes.forEach((vote, i) => {
-      validateVoteChainStep(vote, dayVotes[i - 1], ctx.alive);
-    });
+    dayVotes.forEach((vote, i) => validateVoteChainStep(vote, dayVotes[i - 1], alive));
     const decisive = dayVotes[dayVotes.length - 1];
-    const expected = expectedElimination(decisive, ctx.alive);
+    const expected = expectedElimination(decisive, alive);
     if (!sameEliminatedSet(expected, fact.eliminated)) {
       throw new Error(
-        `dayElimination for round ${fact.round} (eliminated=[${fact.eliminated.join(
-          ", "
-        )}]) is inconsistent with its resolved vote (expected=[${expected.join(", ")}])`
+        `dayElimination for round ${fact.round} (eliminated=[${fact.eliminated.join(", ")}]) is inconsistent with its resolved vote (expected=[${expected.join(", ")}])`
       );
     }
-    return 1;
   }
 
-  // src/evidence.ts
-  function createLikelihoodModel(handlers, nightResultHandler = () => {
-    throw new Error(
-      "nightResult likelihood not implemented yet - requires a calibrated ActionModel"
-    );
-  }, behavioralEvidenceWeight = 1) {
-    return {
-      likelihood(evidence, world, ctx) {
-        if (evidence.type === "nightResult") {
-          return nightResultHandler(evidence, world, ctx);
-        }
-        if (evidence.type === "dayElimination") {
-          return resolveDayElimination(evidence, world, ctx);
-        }
-        if (evidence.type !== "candidateVote" && evidence.type !== "keepOrEliminateVote") {
-          assertAlive(ctx.alive, evidence.actor);
-        }
-        const handler = handlers[evidence.type];
-        const raw = handler(evidence, world, ctx);
-        return behavioralEvidenceWeight === 1 ? raw : raw ** behavioralEvidenceWeight;
-      }
-    };
-  }
-
-  // src/investigation.ts
-  var DETECTED_MECHANIC = {
-    checkIsCommissioner: "checkIsMafia",
-    checkIsMafia: "unanimousNightKill"
-  };
-  function getInvestigationResult(registry, mechanic, targetRole) {
-    return hasMechanic(registry, targetRole, DETECTED_MECHANIC[mechanic]);
-  }
-
-  // src/selfRoleClaimLikelihood.ts
-  function resolve(value, observation, world, ctx) {
-    return typeof value === "function" ? value(observation, world, ctx) : value;
-  }
-  function createSelfRoleClaimHandler(params) {
-    return (observation, world, ctx) => satisfiedBy(observation.claim, world.roles[observation.actor], ctx.groups) ? resolve(params.truthful, observation, world, ctx) : resolve(params.false, observation, world, ctx);
-  }
-
-  // src/roleAssertionLikelihood.ts
-  function resolve2(value, observation, world, ctx) {
-    return typeof value === "function" ? value(observation, world, ctx) : value;
-  }
-  function createRoleAssertionHandler(params) {
-    return (observation, world, ctx) => satisfiedBy(observation.claim, world.roles[observation.target], ctx.groups) ? resolve2(params.truthful, observation, world, ctx) : resolve2(params.false, observation, world, ctx);
-  }
-
-  // src/investigationReportLikelihood.ts
-  function resolve3(value, observation, world, ctx) {
-    return typeof value === "function" ? value(observation, world, ctx) : value;
-  }
-  function createInvestigationReportHandler(params) {
-    return (observation, world, ctx) => {
-      const canPerform = hasMechanic(
-        ctx.roles,
-        world.roles[observation.actor],
-        observation.mechanic
-      );
-      if (!canPerform) {
-        return resolve3(params.bluff, observation, world, ctx);
-      }
-      const matchesActual = getInvestigationResult(
-        ctx.roles,
-        observation.mechanic,
-        world.roles[observation.target]
-      ) === observation.result;
-      return matchesActual ? resolve3(params.truthful, observation, world, ctx) : resolve3(params.falseResult, observation, world, ctx);
-    };
-  }
-
-  // src/teamAlignmentLikelihood.ts
-  function resolve4(value, observation, world, ctx) {
-    return typeof value === "function" ? value(observation, world, ctx) : value;
-  }
-  function createTeamAlignmentHandler(params) {
-    return (observation, world, ctx) => sameTeam(
-      ctx.roles,
-      world.roles[observation.actor],
-      world.roles[observation.target]
-    ) ? resolve4(params.sameTeam, observation, world, ctx) : resolve4(params.differentTeam, observation, world, ctx);
-  }
-
-  // src/candidateVoteLikelihood.ts
-  function resolve5(value, observation, world, ctx, voter) {
-    return typeof value === "function" ? value(observation, world, ctx, voter) : value;
-  }
-  function createCandidateVoteHandler(params) {
-    return (observation, world, ctx) => {
-      const tally = tallyCandidateVote(observation, ctx.alive);
-      let likelihood = 1;
-      tally.candidates.forEach((candidateTally) => {
-        candidateTally.raisedHands.forEach((voter) => {
-          const factor = sameTeam(
-            ctx.roles,
-            world.roles[voter],
-            world.roles[candidateTally.candidate]
-          ) ? params.sameTeamVote : params.differentTeamVote;
-          likelihood *= resolve5(factor, observation, world, ctx, voter);
-        });
-      });
-      tally.abstainers.forEach((voter) => {
-        likelihood *= resolve5(params.abstain, observation, world, ctx, voter);
-      });
-      return likelihood;
-    };
-  }
-
-  // src/keepOrEliminateVoteLikelihood.ts
-  function resolve6(value, observation, world, ctx, voter) {
-    return typeof value === "function" ? value(observation, world, ctx, voter) : value;
-  }
-  function createKeepOrEliminateVoteHandler(params) {
-    return (observation, world, ctx) => {
-      const tally = tallyKeepOrEliminateVote(observation, ctx.alive);
-      const sharesTeamWithAnyCandidate = (voter) => observation.candidates.some(
-        (candidate) => sameTeam(ctx.roles, world.roles[voter], world.roles[candidate])
-      );
-      let likelihood = 1;
-      tally.eliminate.forEach((voter) => {
-        const factor = sharesTeamWithAnyCandidate(voter) ? params.eliminateSharedTeam : params.eliminateNoSharedTeam;
-        likelihood *= resolve6(factor, observation, world, ctx, voter);
-      });
-      tally.keep.forEach((voter) => {
-        const factor = sharesTeamWithAnyCandidate(voter) ? params.keepSharedTeam : params.keepNoSharedTeam;
-        likelihood *= resolve6(factor, observation, world, ctx, voter);
-      });
-      return likelihood;
-    };
-  }
-
-  // src/likelihoodHandlers.ts
-  var uncalibratedHandlers = {
-    /**
-     * selfRoleClaim: "A: I am <role or group>".
-     *
-     * Checks whether world.roles[actor] satisfies the claimed expression -
-     * a "truthful" branch (it does, whether the claim was an exact role or
-     * a group) vs a "lie" branch (it doesn't). This alone is what makes a
-     * citizen claiming commissioner, a mafia claiming commissioner, and a
-     * real commissioner claiming commissioner behave differently - not
-     * because the handler special-cases any of those roles, but because
-     * each is scored against a *different* candidate world. Whether lying
-     * is uniform across roles/claim-specificity or team-dependent (e.g.
-     * mafia bluff more) is a future refinement - it would key off
-     * ctx.roles[...].team or the claim's kind generically, never off a
-     * literal role/team name in a conditional.
-     */
-    selfRoleClaim(observation, world, ctx) {
-      const isTruthful = satisfiedBy(
-        observation.claim,
-        world.roles[observation.actor],
-        ctx.groups
-      );
-      throw new Error(
-        `selfRoleClaim likelihood not calibrated yet (truthful=${isTruthful})`
-      );
-    },
-    /**
-     * roleAssertion: "A: B is <role or group>".
-     *
-     * Depends on world.roles[actor] AND world.roles[target] AND whether
-     * world.roles[target] satisfies the claimed expression - a mafia player
-     * accusing a fellow mafia member is a structurally different situation
-     * from a citizen making the same accusation, even though both are "an
-     * assertion about someone else". The eventual model keys off the
-     * (actorRole, targetRole, correctness) tuple, not off any specific role
-     * name.
-     */
-    roleAssertion(observation, world, ctx) {
-      const actorRole = world.roles[observation.actor];
-      const isCorrect = satisfiedBy(
-        observation.claim,
-        world.roles[observation.target],
-        ctx.groups
-      );
-      throw new Error(
-        `roleAssertion likelihood not calibrated yet (actorRole=${actorRole}, isCorrect=${isCorrect})`
-      );
-    },
-    /**
-     * investigationReport: "A: I used <mechanic> on B, result YES/NO".
-     *
-     * Two deterministic facts are available per candidate world, neither of
-     * which names a role:
-     *  - canPerform: does world.roles[actor] hold observation.mechanic?
-     *  - matchesActual: does observation.result equal what the check would
-     *    really return against world.roles[target] (getInvestigationResult,
-     *    the same rule resolveNight uses)?
-     * Neither is a hard constraint on its own. Anyone may publicly claim a
-     * check, so a world where actor can't perform it is not impossible - the
-     * report is simply not a genuine result there. How likely a bluff, a lie
-     * about a real result, or a truthful report is remains behavioral and
-     * uncalibrated, so no likelihood (including 0) is returned yet.
-     */
-    investigationReport(observation, world, ctx) {
-      const canPerform = hasMechanic(
-        ctx.roles,
-        world.roles[observation.actor],
-        observation.mechanic
-      );
-      const matchesActual = getInvestigationResult(
-        ctx.roles,
-        observation.mechanic,
-        world.roles[observation.target]
-      ) === observation.result;
-      throw new Error(
-        `investigationReport likelihood not calibrated yet (canPerform=${canPerform}, matchesActual=${matchesActual})`
-      );
-    },
-    /**
-     * candidateVote / keepOrEliminateVote: one whole public voting round.
-     *
-     * Scored as a single event, since every living player's choice is part of
-     * the same observation (including abstentions, which only exist relative
-     * to everyone else's hands). A future model may factor it per voter
-     * against the candidate world's roles, but how any role tends to vote is
-     * behavioral and uncalibrated. The deterministic rules - validation,
-     * abstention, counting, outcome - live in voting.ts; they need the alive
-     * state at the time of the vote, which ctx.alive is not guaranteed to be.
-     */
-    candidateVote(observation) {
-      throw new Error(
-        `candidateVote likelihood not calibrated yet (round=${observation.round}, stage=${observation.stage})`
-      );
-    },
-    keepOrEliminateVote(observation) {
-      throw new Error(
-        `keepOrEliminateVote likelihood not calibrated yet (round=${observation.round})`
-      );
-    },
-    /**
-     * suspect: a public behavioral signal - a lightweight, non-mechanical act
-     * available to anyone. A future model would consult whether actor and
-     * target are on the same team *in this world*
-     * (ctx.roles[world.roles[actor]].team vs ...target...team) as a proxy for
-     * "would this role want to suspect this target", plus ctx.history for
-     * pattern-based signals (e.g. repeated suspicion of the same target
-     * carrying diminishing marginal evidence). Still no literal role-name
-     * branching - only team/mechanic lookups through the registry.
-     */
-    suspect(observation, world, ctx) {
-      const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-      const targetTeam = ctx.roles[world.roles[observation.target]].team;
-      throw new Error(
-        `suspect likelihood not calibrated yet (actorTeam=${actorTeam}, targetTeam=${targetTeam})`
-      );
-    },
-    /**
-     * defend: "A publicly defended B".
-     *
-     * Same observation shape regardless of whether actor is a doctor or a
-     * citizen (see the layering discussion - defend is not gated by any
-     * mechanic). Its likelihood should still depend on the candidate roles
-     * of BOTH actor and target in this world (team alignment), and can later
-     * draw on ctx.history/ctx.alive for contextual corroboration (e.g. did
-     * the target survive a night where they were plausibly attacked, which
-     * might weakly correlate with a real doctor's private protect action -
-     * itself never directly observed).
-     */
-    defend(observation, world, ctx) {
-      const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-      const targetTeam = ctx.roles[world.roles[observation.target]].team;
-      throw new Error(
-        `defend likelihood not calibrated yet (actorTeam=${actorTeam}, targetTeam=${targetTeam})`
-      );
-    },
-    /**
-     * nominate: "A nominated B for the elimination vote".
-     *
-     * Same shape/reasoning as suspect - a lightweight public act,
-     * available to anyone, whose eventual likelihood would consult team
-     * alignment in this world plus context (e.g. ctx.history for whether
-     * this nomination follows a suspicious pattern).
-     */
-    nominate(observation, world, ctx) {
-      const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-      const targetTeam = ctx.roles[world.roles[observation.target]].team;
-      throw new Error(
-        `nominate likelihood not calibrated yet (actorTeam=${actorTeam}, targetTeam=${targetTeam})`
-      );
-    }
-  };
-  function createHandlers(selfRoleClaimParams, roleAssertionParams, investigationReportParams, suspectParams, defendParams, nominateParams, candidateVoteParams, keepOrEliminateVoteParams) {
-    return {
-      ...uncalibratedHandlers,
-      selfRoleClaim: createSelfRoleClaimHandler(selfRoleClaimParams),
-      ...roleAssertionParams && {
-        roleAssertion: createRoleAssertionHandler(roleAssertionParams)
-      },
-      ...investigationReportParams && {
-        investigationReport: createInvestigationReportHandler(
-          investigationReportParams
-        )
-      },
-      ...suspectParams && {
-        suspect: createTeamAlignmentHandler(suspectParams)
-      },
-      ...defendParams && {
-        defend: createTeamAlignmentHandler(defendParams)
-      },
-      ...nominateParams && {
-        nominate: createTeamAlignmentHandler(nominateParams)
-      },
-      ...candidateVoteParams && {
-        candidateVote: createCandidateVoteHandler(candidateVoteParams)
-      },
-      ...keepOrEliminateVoteParams && {
-        keepOrEliminateVote: createKeepOrEliminateVoteHandler(
-          keepOrEliminateVoteParams
-        )
-      }
-    };
-  }
-
-  // src/night.ts
-  function resolveDeaths(inputs) {
-    const {
-      mafiaKillSucceeded,
-      mafiaKillTarget,
-      commissionerCheckTarget,
-      commissionerCheckResult,
-      doctorSavedTarget
-    } = inputs;
-    let commissionerCausedDeath;
-    if (commissionerCheckResult && commissionerCheckTarget !== doctorSavedTarget) {
-      commissionerCausedDeath = commissionerCheckTarget;
-    }
-    const died = [];
-    if (mafiaKillSucceeded && mafiaKillTarget !== doctorSavedTarget) {
-      died.push(mafiaKillTarget);
-    }
-    if (commissionerCausedDeath !== void 0 && !died.includes(commissionerCausedDeath)) {
-      died.push(commissionerCausedDeath);
-    }
-    return { commissionerCausedDeath, died };
-  }
-  function resolveNight(world, actions, alive, history, registry) {
-    const players = Object.keys(world.roles);
-    const isAlive2 = (p) => alive[p] === true;
-    const doctorAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "protect")
-    );
-    let doctorSavedTarget;
-    if (doctorAlive && actions.doctorSaveTarget !== void 0) {
-      if (history.previousDoctorSaveTarget === actions.doctorSaveTarget) {
-        throw new Error(
-          `Doctor cannot save "${actions.doctorSaveTarget}" on consecutive nights`
-        );
-      }
-      doctorSavedTarget = actions.doctorSaveTarget;
-    }
-    const killers = players.filter(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
-    );
-    let mafiaKillSucceeded = false;
-    let mafiaKillTarget;
-    if (killers.length > 0) {
-      const choices = killers.map((p) => actions.mafiaTargetChoices[p]);
-      const allChosen = choices.every((c) => c !== void 0);
-      const allSame = allChosen && choices.every((c) => c === choices[0]);
-      if (allSame) {
-        mafiaKillSucceeded = true;
-        mafiaKillTarget = choices[0];
-      }
-    }
-    const donAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsCommissioner")
-    );
-    let donCheckResult;
-    if (donAlive && actions.donCheckTarget !== void 0) {
-      donCheckResult = getInvestigationResult(
-        registry,
-        "checkIsCommissioner",
-        world.roles[actions.donCheckTarget]
-      );
-    }
-    const commissionerAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
-    );
-    let commissionerCheckResult;
-    if (commissionerAlive && actions.commissionerCheckTarget !== void 0) {
-      commissionerCheckResult = getInvestigationResult(
-        registry,
-        "checkIsMafia",
-        world.roles[actions.commissionerCheckTarget]
-      );
-    }
-    const { commissionerCausedDeath, died } = resolveDeaths({
-      mafiaKillSucceeded,
-      mafiaKillTarget,
-      commissionerCheckTarget: actions.commissionerCheckTarget,
-      commissionerCheckResult,
-      doctorSavedTarget
-    });
-    return {
-      mafiaKillSucceeded,
-      mafiaKillTarget,
-      donCheckResult,
-      commissionerCheckResult,
-      commissionerCausedDeath,
-      doctorSavedTarget,
-      died
-    };
-  }
-  function enumerateHiddenNightActions(world, alive, registry) {
-    const players = Object.keys(world.roles);
-    const isAlive2 = (p) => alive[p] === true;
-    const livingPlayers2 = players.filter(isAlive2);
-    const killers = players.filter(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
-    );
-    const donAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsCommissioner")
-    );
-    const commissionerAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
-    );
-    const doctorAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "protect")
-    );
-    let hypotheses = [{ mafiaTargetChoices: {} }];
-    killers.forEach((killer) => {
-      const next = [];
-      hypotheses.forEach((h) => {
-        livingPlayers2.forEach((target) => {
-          next.push({
-            ...h,
-            mafiaTargetChoices: { ...h.mafiaTargetChoices, [killer]: target }
-          });
-        });
-      });
-      hypotheses = next;
-    });
-    function fanOutTarget(include, key) {
-      if (!include) return;
-      const next = [];
-      hypotheses.forEach((h) => {
-        livingPlayers2.forEach((target) => {
-          next.push({ ...h, [key]: target });
-        });
-      });
-      hypotheses = next;
-    }
-    fanOutTarget(donAlive, "donCheckTarget");
-    fanOutTarget(commissionerAlive, "commissionerCheckTarget");
-    fanOutTarget(doctorAlive, "doctorSaveTarget");
-    return hypotheses;
-  }
-
-  // src/nightResultLikelihood.ts
-  function sameDeathSet(a, b) {
-    const setA = new Set(a);
-    const setB = new Set(b);
-    if (setA.size !== setB.size) return false;
-    for (const p of setA) {
-      if (!setB.has(p)) return false;
-    }
-    return true;
-  }
-  function isFactoredActionModel(model) {
-    const candidate = model;
-    return typeof candidate.mafiaConsensusProbability === "function" && typeof candidate.donCheckTargetProbability === "function" && typeof candidate.commissionerCheckTargetProbability === "function" && typeof candidate.doctorSaveTargetProbability === "function";
-  }
-  function scoreGroupedBruteForce(fact, world, alive, registry, actionModel, excludedTarget) {
-    const hypotheses = enumerateHiddenNightActions(world, alive, registry);
-    const history = excludedTarget === void 0 ? {} : { previousDoctorSaveTarget: excludedTarget };
-    const grouped = /* @__PURE__ */ new Map();
-    hypotheses.forEach((hypothesis) => {
-      const resolution = resolveNight(world, hypothesis, alive, {}, registry);
-      if (!sameDeathSet(resolution.died, fact.died)) return;
-      const weight = actionModel.probability(hypothesis, world, alive, history);
-      if (weight === 0) return;
-      const key = hypothesis.doctorSaveTarget;
-      grouped.set(key, (grouped.get(key) ?? 0) + weight);
-    });
-    return grouped;
-  }
-  function mafiaOutcomes(killers, livingPlayers2, actionModel, world, alive) {
-    if (killers.length === 0) {
-      return [{ succeeded: false, target: void 0, probability: 1 }];
-    }
-    let consensusMass = 0;
-    const outcomes = livingPlayers2.map((target) => {
-      const probability = actionModel.mafiaConsensusProbability(target, world, alive, {});
-      consensusMass += probability;
-      return { succeeded: true, target, probability };
-    });
-    outcomes.push({
-      succeeded: false,
-      target: void 0,
-      probability: Math.max(0, 1 - consensusMass)
-    });
-    return outcomes;
-  }
-  function scoreGroupedOptimized(fact, world, alive, registry, actionModel, excludedTarget) {
-    const players = Object.keys(world.roles);
-    const isAlive2 = (p) => alive[p] === true;
-    const livingPlayers2 = players.filter(isAlive2);
-    const killers = players.filter(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
-    );
-    const commissionerAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
-    );
-    const doctorAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "protect")
-    );
-    const outcomes = mafiaOutcomes(killers, livingPlayers2, actionModel, world, alive);
-    const commissionerTargets = commissionerAlive ? livingPlayers2 : [void 0];
-    const doctorTargets = doctorAlive ? livingPlayers2 : [void 0];
-    const history = excludedTarget === void 0 ? {} : { previousDoctorSaveTarget: excludedTarget };
-    const grouped = /* @__PURE__ */ new Map();
-    for (const outcome of outcomes) {
-      if (outcome.probability === 0) continue;
-      for (const commissionerCheckTarget of commissionerTargets) {
-        const commissionerCheckResult = commissionerCheckTarget === void 0 ? void 0 : getInvestigationResult(
-          registry,
-          "checkIsMafia",
-          world.roles[commissionerCheckTarget]
-        );
-        const commissionerProbability = commissionerCheckTarget === void 0 ? 1 : actionModel.commissionerCheckTargetProbability(
-          commissionerCheckTarget,
-          world,
-          alive,
-          {}
-        );
-        for (const doctorSavedTarget of doctorTargets) {
-          const doctorProbability = doctorSavedTarget === void 0 ? 1 : actionModel.doctorSaveTargetProbability(doctorSavedTarget, world, alive, history);
-          if (doctorProbability === 0) continue;
-          const { died } = resolveDeaths({
-            mafiaKillSucceeded: outcome.succeeded,
-            mafiaKillTarget: outcome.target,
-            commissionerCheckTarget,
-            commissionerCheckResult,
-            doctorSavedTarget
-          });
-          if (!sameDeathSet(died, fact.died)) continue;
-          const weight = outcome.probability * commissionerProbability * doctorProbability;
-          grouped.set(doctorSavedTarget, (grouped.get(doctorSavedTarget) ?? 0) + weight);
-        }
-      }
-    }
-    return grouped;
-  }
-  var NO_CONSTRAINT = /* @__PURE__ */ new Map([[void 0, 1]]);
-  function sumValues(map) {
-    let total = 0;
-    map.forEach((v) => {
-      total += v;
-    });
-    return total;
-  }
-  function nightResultLikelihoodAcrossNights(fact, world, ctx, scoreGrouped) {
-    const priorNights = ctx.history.filter(
-      (event) => event.type === "nightResult" && event.round < fact.round
-    );
-    let belief = NO_CONSTRAINT;
-    priorNights.forEach((priorFact) => {
-      const aliveThen = getAliveStateAt(ctx.config, ctx.history, {
-        phase: "night",
-        round: priorFact.round
-      });
-      const combined = /* @__PURE__ */ new Map();
-      belief.forEach((priorWeight, excluded) => {
-        const grouped = scoreGrouped(priorFact, aliveThen, excluded);
-        grouped.forEach((weight, target) => {
-          combined.set(target, (combined.get(target) ?? 0) + priorWeight * weight);
-        });
-      });
-      const total2 = sumValues(combined);
-      belief = total2 === 0 ? NO_CONSTRAINT : new Map([...combined].map(([target, weight]) => [target, weight / total2]));
-    });
-    let total = 0;
-    belief.forEach((priorWeight, excluded) => {
-      total += priorWeight * sumValues(scoreGrouped(fact, ctx.alive, excluded));
-    });
-    return total;
-  }
-  function createBruteForceNightResultHandler(actionModel) {
-    return (fact, world, ctx) => nightResultLikelihoodAcrossNights(
-      fact,
-      world,
-      ctx,
-      (f, alive, excluded) => scoreGroupedBruteForce(f, world, alive, ctx.roles, actionModel, excluded)
-    );
-  }
-  function createOptimizedNightResultHandler(actionModel) {
-    return (fact, world, ctx) => nightResultLikelihoodAcrossNights(
-      fact,
-      world,
-      ctx,
-      (f, alive, excluded) => scoreGroupedOptimized(f, world, alive, ctx.roles, actionModel, excluded)
-    );
-  }
-  function createNightResultHandler(actionModel) {
-    if (isFactoredActionModel(actionModel)) {
-      return createOptimizedNightResultHandler(actionModel);
-    }
-    return createBruteForceNightResultHandler(actionModel);
-  }
-
-  // src/uniformActionModel.ts
-  function createUniformActionModel(registry) {
-    const hypothesisCountCache = /* @__PURE__ */ new WeakMap();
-    const shapeCache = /* @__PURE__ */ new WeakMap();
-    function hypothesisCount(world, alive) {
-      let byAlive = hypothesisCountCache.get(world);
-      if (!byAlive) {
-        byAlive = /* @__PURE__ */ new WeakMap();
-        hypothesisCountCache.set(world, byAlive);
-      }
-      let count = byAlive.get(alive);
-      if (count === void 0) {
-        count = enumerateHiddenNightActions(world, alive, registry).length;
-        byAlive.set(alive, count);
-      }
-      return count;
-    }
-    function shapeFor(world, alive) {
-      let byAlive = shapeCache.get(world);
-      if (!byAlive) {
-        byAlive = /* @__PURE__ */ new WeakMap();
-        shapeCache.set(world, byAlive);
-      }
-      let shape = byAlive.get(alive);
-      if (shape === void 0) {
-        const players = Object.keys(world.roles);
-        const isAlive2 = (p) => alive[p] === true;
-        const livingCount = players.filter(isAlive2).length;
-        const killerCount = players.filter(
-          (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "unanimousNightKill")
-        ).length;
-        const doctorAlive = players.some(
-          (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "protect")
-        );
-        shape = { livingCount, killerCount, doctorAlive };
-        byAlive.set(alive, shape);
-      }
-      return shape;
-    }
-    function excludedTarget(world, alive, history) {
-      const target = history.previousDoctorSaveTarget;
-      if (target === void 0) return void 0;
-      if (alive[target] !== true) return void 0;
-      if (!shapeFor(world, alive).doctorAlive) return void 0;
-      return target;
-    }
-    return {
-      probability(actions, world, alive, history) {
-        const excluded = excludedTarget(world, alive, history);
-        const baseCount = hypothesisCount(world, alive);
-        if (excluded === void 0) {
-          return 1 / baseCount;
-        }
-        if (actions.doctorSaveTarget === excluded) {
-          return 0;
-        }
-        const { livingCount } = shapeFor(world, alive);
-        const adjustedCount = baseCount * (livingCount - 1) / livingCount;
-        return adjustedCount === 0 ? 0 : 1 / adjustedCount;
-      },
-      mafiaConsensusProbability(_target, world, alive) {
-        const { livingCount, killerCount } = shapeFor(world, alive);
-        return 1 / Math.pow(livingCount, killerCount);
-      },
-      donCheckTargetProbability(_target, world, alive) {
-        return 1 / shapeFor(world, alive).livingCount;
-      },
-      commissionerCheckTargetProbability(_target, world, alive) {
-        return 1 / shapeFor(world, alive).livingCount;
-      },
-      doctorSaveTargetProbability(target, world, alive, history) {
-        const { livingCount } = shapeFor(world, alive);
-        const excluded = excludedTarget(world, alive, history);
-        if (excluded === void 0) {
-          return 1 / livingCount;
-        }
-        if (target === excluded) {
-          return 0;
-        }
-        return livingCount - 1 === 0 ? 0 : 1 / (livingCount - 1);
-      }
-    };
-  }
-
-  // src/behavioralModel.ts
-  function expressionTeam(expr, roles, groups) {
-    if (expr.kind === "role") return roles[expr.role].team;
-    if (!groups) return void 0;
-    const members = groups[expr.group];
-    if (members.length === 0) return void 0;
-    const firstTeam = roles[members[0]].team;
-    return members.every((r) => roles[r].team === firstTeam) ? firstTeam : void 0;
-  }
-  function roleClaimFalseFactor(params) {
-    return (observation, world, ctx) => {
-      const claimTeam = expressionTeam(observation.claim, ctx.roles, ctx.groups);
-      const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-      return claimTeam !== void 0 && actorTeam === claimTeam ? params.falseSameTeam : params.falseDifferentTeam;
-    };
-  }
-  function selfRoleClaimParamsFrom(params) {
-    return { truthful: params.truthful, false: roleClaimFalseFactor(params) };
-  }
-  function roleAssertionParamsFrom(params) {
-    return { truthful: params.truthful, false: roleClaimFalseFactor(params) };
-  }
-  var NEUTRAL_TEAM_ALIGNMENT = { ownTeam: 0.5, otherTeam: 0.5 };
-  function lookupTeamAlignment(params, team) {
-    return params[team] ?? NEUTRAL_TEAM_ALIGNMENT;
-  }
-  function repeatedPosition(observationType, actor, target, history) {
-    return history.some(
-      (event) => event.type === observationType && event.actor === actor && event.target === target
-    );
-  }
-  function teamAlignmentParamsFrom(behavior, observationType, repeatFactor) {
-    const factor = (own) => (observation, world, ctx) => {
-      const actorTeam = ctx.roles[world.roles[observation.actor]].team;
-      const { ownTeam, otherTeam } = lookupTeamAlignment(behavior, actorTeam);
-      const base = own ? ownTeam : otherTeam;
-      const repeated = repeatedPosition(observationType, observation.actor, observation.target, ctx.history);
-      return repeated ? base * repeatFactor : base;
-    };
-    return { sameTeam: factor(true), differentTeam: factor(false) };
-  }
-  var DEFAULT_ABSTAIN_RATE = 0.2;
-  function candidateVoteParamsFrom(params) {
-    return {
-      sameTeamVote: (_observation, world, ctx, voter) => lookupTeamAlignment(params.vote, ctx.roles[world.roles[voter]].team).ownTeam,
-      differentTeamVote: (_observation, world, ctx, voter) => lookupTeamAlignment(params.vote, ctx.roles[world.roles[voter]].team).otherTeam,
-      abstain: (_observation, world, ctx, voter) => params.abstain[ctx.roles[world.roles[voter]].team] ?? DEFAULT_ABSTAIN_RATE
-    };
-  }
-  var NEUTRAL_KEEP_OR_ELIMINATE = {
-    eliminateSharedTeam: 0.5,
-    keepSharedTeam: 0.5,
-    eliminateNoSharedTeam: 0.5,
-    keepNoSharedTeam: 0.5
-  };
-  function keepOrEliminateParamsFrom(params) {
-    const entryFor = (world, ctx, voter) => params[ctx.roles[world.roles[voter]].team] ?? NEUTRAL_KEEP_OR_ELIMINATE;
-    return {
-      eliminateSharedTeam: (_o, world, ctx, voter) => entryFor(world, ctx, voter).eliminateSharedTeam,
-      keepSharedTeam: (_o, world, ctx, voter) => entryFor(world, ctx, voter).keepSharedTeam,
-      eliminateNoSharedTeam: (_o, world, ctx, voter) => entryFor(world, ctx, voter).eliminateNoSharedTeam,
-      keepNoSharedTeam: (_o, world, ctx, voter) => entryFor(world, ctx, voter).keepNoSharedTeam
-    };
-  }
-  var NEUTRAL_ALIGNMENT_TABLE = {
-    mafia: { ownTeam: 0.5, otherTeam: 0.5 },
-    town: { ownTeam: 0.5, otherTeam: 0.5 }
-  };
-  var NEUTRAL_KEEP_OR_ELIMINATE_TABLE = {
-    mafia: { ...NEUTRAL_KEEP_OR_ELIMINATE },
-    town: { ...NEUTRAL_KEEP_OR_ELIMINATE }
-  };
-  var defaultBehavioralModelParams = {
-    selfRoleClaim: { truthful: 0.7, falseSameTeam: 0.2, falseDifferentTeam: 0.2 },
-    roleAssertion: { truthful: 0.6, falseSameTeam: 0.2, falseDifferentTeam: 0.2 },
-    investigationReport: { truthful: 0.7, falseResult: 0.15, bluff: 0.25 },
-    suspect: NEUTRAL_ALIGNMENT_TABLE,
-    defend: NEUTRAL_ALIGNMENT_TABLE,
-    nominate: NEUTRAL_ALIGNMENT_TABLE,
-    repeatFactor: 1,
-    candidateVote: {
-      vote: NEUTRAL_ALIGNMENT_TABLE,
-      abstain: { mafia: 0.2, town: 0.2 }
-    },
-    keepOrEliminateVote: NEUTRAL_KEEP_OR_ELIMINATE_TABLE
-  };
-  function createBehavioralHandlers(params) {
-    return createHandlers(
-      selfRoleClaimParamsFrom(params.selfRoleClaim),
-      roleAssertionParamsFrom(params.roleAssertion),
-      params.investigationReport,
-      teamAlignmentParamsFrom(params.suspect, "suspect", params.repeatFactor),
-      teamAlignmentParamsFrom(params.defend, "defend", params.repeatFactor),
-      teamAlignmentParamsFrom(params.nominate, "nominate", params.repeatFactor),
-      candidateVoteParamsFrom(params.candidateVote),
-      keepOrEliminateParamsFrom(params.keepOrEliminateVote)
-    );
-  }
-  function createBehavioralLikelihoodModel(params, actionModel = createUniformActionModel(defaultRoleRegistry), behavioralEvidenceWeight = 1) {
-    return createLikelihoodModel(
-      createBehavioralHandlers(params),
-      createNightResultHandler(actionModel),
-      behavioralEvidenceWeight
-    );
-  }
-
-  // src/probability.ts
-  function getProbability(worlds, player, role) {
-    return getExpressionProbability(worlds, player, { kind: "role", role });
-  }
-  function getExpressionProbability(worlds, player, expr, groups) {
-    return worlds.filter((world) => satisfiedBy(expr, world.roles[player], groups)).reduce((sum, world) => sum + world.probability, 0);
-  }
-
-  // src/gameEvaluation.ts
-  function describeEvidence(evidence) {
-    switch (evidence.type) {
+  // src/describeGameEvent.ts
+  function describeGameEvent(event) {
+    switch (event.type) {
       case "selfRoleClaim":
-        return `${evidence.actor} claims ${describeExpression(evidence.claim)}`;
+        return `${event.actor} claims ${describeExpression(event.claim)}`;
       case "roleAssertion":
-        return `${evidence.actor} asserts ${evidence.target} is ${describeExpression(evidence.claim)}`;
+        return `${event.actor} asserts ${event.target} is ${describeExpression(event.claim)}`;
       case "investigationReport":
-        return `${evidence.actor} reports ${evidence.mechanic} on ${evidence.target} = ${evidence.result}`;
+        return `${event.actor} reports ${event.mechanic} on ${event.target} = ${event.result ? "YES" : "NO"}`;
       case "suspect":
-        return `${evidence.actor} suspects ${evidence.target}`;
+        return `${event.actor} suspects ${event.target}${describeIntensity(event.intensity)}`;
       case "defend":
-        return `${evidence.actor} defends ${evidence.target}`;
+        return `${event.actor} defends ${event.target}${describeIntensity(event.intensity)}`;
       case "nominate":
-        return `${evidence.actor} nominates ${evidence.target}`;
+        return `${event.actor} nominates ${event.target}${describeIntensity(event.intensity)}`;
       case "candidateVote":
-        return `vote (${evidence.stage}): candidates=[${evidence.candidates.join(",")}]`;
+        return `vote (${event.stage}): candidates=[${event.candidates.join(",")}]`;
       case "keepOrEliminateVote":
-        return `keep/eliminate vote: candidates=[${evidence.candidates.join(",")}]`;
+        return `keep/eliminate vote: candidates=[${event.candidates.join(",")}]`;
       case "nightResult":
-        return `night ${evidence.round}: died=[${evidence.died.join(",")}]`;
+        return `night ${event.round}: died=[${event.died.join(",")}]`;
       case "dayElimination":
-        return `day ${evidence.round} elimination: [${evidence.eliminated.join(",")}]`;
+        return `day ${event.round} elimination: [${event.eliminated.join(",")}]`;
     }
   }
   function describeExpression(expr) {
     return expr.kind === "role" ? expr.role : `<${expr.group}>`;
   }
+  function describeIntensity(intensity) {
+    if (intensity === void 0 || intensity === 3) return "";
+    return ` (${"\u2605".repeat(intensity)}${"\u2606".repeat(5 - intensity)})`;
+  }
 
-  // src/gameOutcome.ts
-  function extractTeamCounts(world, alive, registry) {
-    const players = Object.keys(world.roles);
-    const isAlive2 = (p) => alive[p] === true;
-    const mafiaAlive = players.filter(
-      (p) => isAlive2(p) && registry[world.roles[p]].team === "mafia"
-    ).length;
-    const townAlive = players.filter(
-      (p) => isAlive2(p) && registry[world.roles[p]].team === "town"
-    ).length;
-    const doctorAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "protect")
-    );
-    const commissionerAlive = players.some(
-      (p) => isAlive2(p) && hasMechanic(registry, world.roles[p], "checkIsMafia")
-    );
-    return { mafiaAlive, townAlive, doctorAlive, commissionerAlive };
-  }
-  function getGameOutcome(world, alive, registry) {
-    const counts = extractTeamCounts(world, alive, registry);
-    if (counts.mafiaAlive === 0) return "townWon";
-    if (counts.townAlive === 0) return "mafiaWon";
-    return "ongoing";
-  }
-  function getPossibleWorlds(worlds, alive, registry) {
-    const result = { townWon: [], mafiaWon: [], ongoing: [] };
-    worlds.filter((world) => world.probability > 0).forEach((world) => {
-      result[getGameOutcome(world, alive, registry)].push(world);
+  // src/relations/affinity.ts
+  var ROUND_DECAY = 0.8;
+  var AFFINITY_WEIGHTS = {
+    /** A defends B. */
+    defend: 3,
+    /** A suspects/nominates B, or A raises a hand for B as a candidate/to eliminate B. */
+    directOpposition: -3,
+    /**
+     * Total cooperation credit shared among every pair of players who
+     * independently targeted (suspected/nominated/voted for) the same third
+     * player in the same round - split evenly across however many pairs that
+     * group actually has (see this file's own doc), so a 2-player
+     * coincidence gets the full weight and a near-unanimous vote gets almost
+     * none.
+     */
+    sharedTarget: 1
+  };
+  function bump(matrix, a, b, amount) {
+    if (a === b) return;
+    [
+      [a, b],
+      [b, a]
+    ].forEach(([x, y]) => {
+      const row = matrix.get(x) ?? /* @__PURE__ */ new Map();
+      row.set(y, (row.get(y) ?? 0) + amount);
+      matrix.set(x, row);
     });
-    return result;
+  }
+  function affinityBetween(matrix, a, b) {
+    if (a === b) return 0;
+    return matrix.get(a)?.get(b) ?? 0;
+  }
+  function recordTargeting(targetedBy, target, round, actor) {
+    const key = `${target}#${round}`;
+    const group = targetedBy.get(key) ?? { round, actors: /* @__PURE__ */ new Set() };
+    group.actors.add(actor);
+    targetedBy.set(key, group);
+  }
+  function decayFor(round, latestRound) {
+    const age = Math.max(0, latestRound - round);
+    return Math.pow(ROUND_DECAY, age);
+  }
+  var DEFAULT_INTENSITY = 3;
+  function intensityMultiplier(intensity) {
+    return (intensity ?? DEFAULT_INTENSITY) / DEFAULT_INTENSITY;
+  }
+  function computeAffinityMatrix(players, events) {
+    const matrix = new Map(players.map((p) => [p, /* @__PURE__ */ new Map()]));
+    const targetedBy = /* @__PURE__ */ new Map();
+    const latestRound = events.reduce((max, e) => Math.max(max, e.round), 0);
+    events.forEach((event) => {
+      const decay = decayFor(event.round, latestRound);
+      if (event.type === "defend") {
+        bump(matrix, event.actor, event.target, AFFINITY_WEIGHTS.defend * decay * intensityMultiplier(event.intensity));
+      } else if (event.type === "suspect" || event.type === "nominate") {
+        bump(matrix, event.actor, event.target, AFFINITY_WEIGHTS.directOpposition * decay * intensityMultiplier(event.intensity));
+        recordTargeting(targetedBy, event.target, event.round, event.actor);
+      } else if (event.type === "candidateVote") {
+        event.candidates.forEach((candidate) => {
+          const voters = event.handsRaised[candidate] ?? [];
+          voters.forEach((voter) => {
+            bump(matrix, voter, candidate, AFFINITY_WEIGHTS.directOpposition * decay);
+            recordTargeting(targetedBy, candidate, event.round, voter);
+          });
+        });
+      } else if (event.type === "keepOrEliminateVote") {
+        event.eliminateHands.forEach((voter) => {
+          event.candidates.forEach((candidate) => {
+            bump(matrix, voter, candidate, AFFINITY_WEIGHTS.directOpposition * decay);
+          });
+        });
+      }
+    });
+    targetedBy.forEach(({ round, actors }) => {
+      const list = [...actors];
+      const pairCount = list.length * (list.length - 1) / 2;
+      if (pairCount === 0) return;
+      const perPairBonus = AFFINITY_WEIGHTS.sharedTarget / pairCount * decayFor(round, latestRound);
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          bump(matrix, list[i], list[j], perPairBonus);
+        }
+      }
+    });
+    return matrix;
   }
 
-  // src/app/teamAlignment.ts
-  function getTeammateProbabilities(worlds, player, otherPlayers, registry) {
+  // src/relations/clustering.ts
+  function detectTeams(players, matrix) {
+    let clusters = players.map((p) => [p]);
+    function interClusterAffinity(a, b) {
+      let sum = 0;
+      let count = 0;
+      a.forEach((x) => {
+        b.forEach((y) => {
+          sum += affinityBetween(matrix, x, y);
+          count += 1;
+        });
+      });
+      return count === 0 ? 0 : sum / count;
+    }
+    for (; ; ) {
+      let bestPair = null;
+      let bestScore = 0;
+      for (let i2 = 0; i2 < clusters.length; i2++) {
+        for (let j2 = i2 + 1; j2 < clusters.length; j2++) {
+          const score = interClusterAffinity(clusters[i2], clusters[j2]);
+          if (score > bestScore) {
+            bestScore = score;
+            bestPair = [i2, j2];
+          }
+        }
+      }
+      if (!bestPair) break;
+      const [i, j] = bestPair;
+      const merged = [...clusters[i], ...clusters[j]];
+      clusters = clusters.filter((_, index) => index !== i && index !== j);
+      clusters.push(merged);
+    }
+    return clusters.map((cluster) => [...cluster].sort()).sort((a, b) => b.length !== a.length ? b.length - a.length : a[0].localeCompare(b[0]));
+  }
+
+  // src/relations/confirmedFacts.ts
+  function deriveConfirmedTeams(events, myPlayerNumber, myRole, registry) {
     const result = {};
-    otherPlayers.filter((p) => p !== player).forEach((other) => {
-      result[other] = worlds.filter((w) => sameTeam(registry, w.roles[player], w.roles[other])).reduce((sum, w) => sum + w.probability, 0);
+    if (myRole === null) return result;
+    events.forEach((event) => {
+      if (event.type !== "investigationReport") return;
+      if (event.actor !== myPlayerNumber) return;
+      if (!hasMechanic(registry, myRole, event.mechanic)) return;
+      if (event.mechanic === "checkIsMafia") {
+        result[event.target] = event.result ? "mafia" : "town";
+      } else if (event.mechanic === "checkIsCommissioner" && event.result) {
+        result[event.target] = "town";
+      }
     });
     return result;
   }
 
   // src/app/types.ts
-  var APP_SCHEMA_VERSION = 1;
-  var CURRENT_PREDICTOR_VERSION = "default-flat-v1";
-  var CURRENT_ENGINE_VERSION = "1.0.0";
+  var APP_SCHEMA_VERSION = 2;
+  var CURRENT_ENGINE_VERSION = "2.0.0";
   function defaultRoleCountsForPlayerCount(playerCount) {
     return {
       don: 1,
@@ -1381,7 +472,7 @@
 
   // src/app/storage.ts
   var APP_STATE_STORAGE_KEY = "mafiaPredictor.appState";
-  var CURRENT_APP_VERSION = "0.1.0";
+  var CURRENT_APP_VERSION = "2.0.0";
   function emptyAppState() {
     return { schemaVersion: APP_SCHEMA_VERSION, appVersion: CURRENT_APP_VERSION, currentGame: null, history: [] };
   }
@@ -1462,45 +553,55 @@
       }
       return session.uiPhase.round;
     }
-    setting(config) {
-      return { config, roles: defaultRoleRegistry, groups: defaultGroupRegistry };
+    /** The current day's round number, valid from any of this day's decision-making sub-phases ("day" itself, an in-progress candidateVote, or an in-progress keepOrEliminateVote). */
+    requireDayRound2(session) {
+      if (session.uiPhase.kind === "day" || session.uiPhase.kind === "voting" || session.uiPhase.kind === "keepOrEliminateVoting") {
+        return session.uiPhase.round;
+      }
+      throw new GameFacadeError(`this action requires the "day", "voting", or "keepOrEliminateVoting" phase, current phase is "${session.uiPhase.kind}"`);
     }
-    /** The ONE place a LikelihoodModel is constructed - swap the params object here to change the predictor's behavioral assumptions; never inline elsewhere. */
-    model() {
-      return createBehavioralLikelihoodModel(defaultBehavioralModelParams);
-    }
-    /**
-     * Recomputes the full posterior from `session.eventLog` - the single
-     * "replay" operation everything else in this class is built on. Throws
-     * exactly when processEvidence/updateProbabilities would (a malformed or
-     * mechanically-impossible event) - callers that are VALIDATING a
-     * not-yet-committed event call this on a candidate session BEFORE
-     * assigning it to `this.state`, so an invalid manual entry is rejected
-     * without corrupting the persisted log (see appendEvent).
-     */
-    computeSteps(session) {
-      const worlds = generateWorlds(session.config);
-      const events = session.eventLog.map((e) => e.event);
-      return processEvidence(worlds, events, this.model(), this.setting(session.config));
-    }
-    currentWorlds(session) {
-      const steps = this.computeSteps(session);
-      return steps.length > 0 ? steps[steps.length - 1].posterior : generateWorlds(session.config);
-    }
-    /** Alive state after EVERY recorded event so far - independent of uiPhase, always "as of right now". */
+    /** Alive state after EVERY recorded event so far. Throws if the log is somehow inconsistent (a player dying twice) - defensive; appendEvent already validates before anything is committed. */
     currentAliveState(session) {
       let alive = initAliveState(session.config);
       session.eventLog.forEach(({ event }) => {
-        if (event.type === "nightResult") event.died.forEach((p) => alive = markDead(alive, p));
-        if (event.type === "dayElimination") event.eliminated.forEach((p) => alive = markDead(alive, p));
+        if (event.type === "nightResult") {
+          event.died.forEach((p) => {
+            if (alive[p] === false) throw new GameFacadeError(`player "${p}" died but was already dead`);
+            alive = markDead(alive, p);
+          });
+        }
+        if (event.type === "dayElimination") {
+          event.eliminated.forEach((p) => {
+            if (alive[p] === false) throw new GameFacadeError(`player "${p}" was eliminated but was already dead`);
+            alive = markDead(alive, p);
+          });
+        }
       });
       return alive;
     }
-    /** Appends `event`, validating it via a dry-run computeSteps() BEFORE committing - throws (and leaves `session` untouched) on an invalid event. */
+    /**
+     * Appends `event`, validating it BEFORE committing - throws (and leaves
+     * `session` untouched) on an invalid event. Replaces the old Bayesian
+     * facade's "dry-run computeSteps()" validation with direct, deterministic
+     * checks: the actor (for a single-actor Observation) must be alive right
+     * now, a dayElimination must match its round's actual vote chain
+     * (validateDayElimination), and any death must not double-kill someone
+     * (currentAliveState's own guard).
+     */
     appendEvent(session, event) {
+      if (event.type !== "candidateVote" && event.type !== "keepOrEliminateVote" && event.type !== "nightResult" && event.type !== "dayElimination") {
+        const alive = this.currentAliveState(session);
+        if (alive[event.actor] !== true) {
+          throw new GameFacadeError(`"${event.actor}" is dead and cannot produce a new action`);
+        }
+      }
       const entry = { event, uiPhaseBefore: session.uiPhase };
       const candidate = { ...session, eventLog: [...session.eventLog, entry] };
-      this.computeSteps(candidate);
+      if (event.type === "dayElimination") {
+        const votesThisRound = candidate.eventLog.map((e) => e.event).filter((e) => e.type === "candidateVote" || e.type === "keepOrEliminateVote");
+        validateDayElimination(event, votesThisRound, this.currentAliveState(session));
+      }
+      this.currentAliveState(candidate);
       return candidate;
     }
     requireVotingDraft(session, kind) {
@@ -1515,14 +616,7 @@
     getAppScreen() {
       return getAppScreen(this.state);
     }
-    /**
-     * Everything about the current session a UI needs to render config/phase/
-     * history summaries, EXCLUDING `myRole`'s actual value (only whether it's
-     * been set) and any probability - the two things that must never reach
-     * the normal game screen. Deliberately one small, safe read model rather
-     * than exposing `GameSession` directly, so a future field added to
-     * GameSession can't accidentally leak through this getter unreviewed.
-     */
+    /** Everything about the current session a UI needs to render config/phase/history summaries, EXCLUDING `myRole`'s actual value (only whether it's been set). */
     getPublicSessionView() {
       const s = this.requireGame();
       return {
@@ -1536,33 +630,13 @@
         eventCount: s.eventLog.length,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
-        engineVersion: s.engineVersion,
-        predictorVersion: s.predictorVersion
+        engineVersion: s.engineVersion
       };
     }
-    /** Every distinct role in this game's configuration - for a role picker (e.g. the secret-role-entry screen). Order matches roles.ts's own key order, not config.roles' (possibly duplicated) order. */
+    /** Every distinct role in this game's configuration - for a role picker. */
     getRoleOptions() {
       const s = this.requireGame();
       return Array.from(new Set(s.config.roles));
-    }
-    /**
-     * P(mafia team) before any evidence, for this game's role configuration -
-     * i.e. what every player's mafiaProbability equals at the very start.
-     * Reuses generateWorlds()/getExpressionProbability() exactly as
-     * getPublicPlayerProbabilities() does, just against a fresh no-evidence
-     * world set instead of the current one - no new inference. Every player
-     * is interchangeable before any evidence, so this is a single game-wide
-     * number, not per-player.
-     *
-     * Exists so a UI can anchor a "neutral" visual (e.g. a probability bar's
-     * center point) at the game's actual prior instead of a universal 0.5,
-     * which is wrong whenever the mafia team isn't exactly half the players -
-     * the normal case (e.g. 2 of 7 by this app's own default role policy).
-     */
-    getPriorMafiaProbability() {
-      const s = this.requireGame();
-      const worlds = generateWorlds(s.config);
-      return getExpressionProbability(worlds, s.config.players[0], { kind: "group", group: "mafia" }, defaultGroupRegistry);
     }
     createGame(setup) {
       const config = buildGameConfig(setup.playerCount, setup.roleCounts);
@@ -1579,7 +653,6 @@
       const session = {
         schemaVersion: APP_SCHEMA_VERSION,
         engineVersion: CURRENT_ENGINE_VERSION,
-        predictorVersion: CURRENT_PREDICTOR_VERSION,
         createdAt: now,
         updatedAt: now,
         config,
@@ -1588,6 +661,7 @@
         eventLog: [],
         uiPhase: { kind: "day", round: 0 },
         votingDraft: null,
+        phaseBeforeFinish: null,
         finalRoles: null,
         confirmedOutcome: null
       };
@@ -1615,12 +689,54 @@
     getCurrentPhase() {
       return this.requireGame().uiPhase;
     }
+    /**
+     * True while the current phase was entered by a pure phase transition
+     * (startNight/startVoting/startKeepOrEliminateVote) that never appended
+     * an event - i.e. there is nothing for undoLastEvent() to undo, but the
+     * phase itself can still be backed out of accident-free via
+     * cancelCurrentSubPhase(). False for "day" (there is nothing to cancel
+     * back to) and "finished" (use resumeGame() instead).
+     */
+    canCancelCurrentPhase() {
+      return this.requireGame().uiPhase.kind !== "day" && this.requireGame().uiPhase.kind !== "finished";
+    }
+    /**
+     * Backs out of an accidentally-started night/vote/keep-or-eliminate vote,
+     * discarding any in-progress draft, WITHOUT recording anything - safe
+     * specifically because startNight()/startVoting()/startKeepOrEliminateVote()
+     * only ever change `uiPhase`, they never append an event (see each of
+     * their own docs), so there is nothing in the event log to undo. Reverts
+     * to exactly the phase that started this one:
+     *  - "night" -> the day it was started from
+     *  - "voting" (initial) -> that same day
+     *  - "voting" (revote) -> the tied initial vote (its event is still in
+     *    the log, so the UI's existing "noDraft"/getVoteRecoveryState()
+     *    handling picks it back up as "tied", offering the same next steps)
+     *  - "keepOrEliminateVoting" -> the tied revote, the same way
+     */
+    cancelCurrentSubPhase() {
+      const session = this.requireGame();
+      const phase = session.uiPhase;
+      let target;
+      if (phase.kind === "night") {
+        target = { kind: "day", round: phase.round - 1 };
+      } else if (phase.kind === "voting" && phase.stage === "initial") {
+        target = { kind: "day", round: phase.round };
+      } else if (phase.kind === "voting" && phase.stage === "revote") {
+        target = { kind: "voting", round: phase.round, stage: "initial", candidates: phase.candidates };
+      } else if (phase.kind === "keepOrEliminateVoting") {
+        target = { kind: "voting", round: phase.round, stage: "revote", candidates: phase.candidates };
+      } else {
+        throw new GameFacadeError(`cancelCurrentSubPhase() has nothing to cancel from the "${phase.kind}" phase`);
+      }
+      this.updateSession({ ...session, uiPhase: target, votingDraft: null });
+    }
     startNight() {
       const session = this.requireGame();
       const round = this.requireDayRound(session);
       this.updateSession({ ...session, uiPhase: { kind: "night", round: round + 1 } });
     }
-    /** Records this night's deaths (may be empty) and advances to the following day. Day 1 has no preceding night, so this is never called before it. */
+    /** Records this night's deaths (may be empty) and advances to the following day. */
     confirmNightDeaths(deadPlayers) {
       const session = this.requireGame();
       if (session.uiPhase.kind !== "night") throw new GameFacadeError(`confirmNightDeaths() requires the "night" phase, current phase is "${session.uiPhase.kind}"`);
@@ -1631,10 +747,11 @@
     // ============================================================
     // Day actions (suspect/defend/nominate) and claims
     // ============================================================
-    recordAction(actor, type, target) {
+    /** `intensity` (1-5 stars, defaults to 3) is how confidently the actor means this - see ActionIntensity's own doc and relations/affinity.ts's use of it. */
+    recordAction(actor, type, target, intensity) {
       const session = this.requireGame();
       const round = this.requireDayRound(session);
-      this.updateSession(this.appendEvent(session, { type, round, actor, target }));
+      this.updateSession(this.appendEvent(session, { type, round, actor, target, intensity }));
     }
     recordSelfRoleClaim(actor, claim) {
       const session = this.requireGame();
@@ -1654,7 +771,6 @@
     // ============================================================
     // Voting
     // ============================================================
-    /** `stage: "initial"` starts fresh from the "day" phase; `stage: "revote"` continues from the "voting" phase a just-confirmed tied vote left the session in. */
     startVoting(stage, candidates) {
       const session = this.requireGame();
       const round = this.requireDayRound2(session);
@@ -1669,7 +785,6 @@
       const draft = this.requireVotingDraft(session, "candidateVote");
       this.updateSession({ ...session, votingDraft: { ...draft, handsRaised: { ...draft.handsRaised, [candidate]: [...voters] } } });
     }
-    /** Commits the in-progress candidateVote draft as a real event and returns the engine's own resolution (winner, or a tie needing a revote) - never invents a different voting model, reuses voting.ts's resolveCandidateVote unchanged. */
     confirmVote() {
       const session = this.requireGame();
       if (session.uiPhase.kind !== "voting") throw new GameFacadeError('confirmVote() requires the "voting" phase');
@@ -1680,7 +795,7 @@
       const alive = this.currentAliveState(withEvent);
       return resolveCandidateVote(event, alive);
     }
-    /** Vote tally so far (including inferred abstention-to-last-candidate) for the in-progress draft - for a live "N votes" display before confirming. */
+    /** Vote tally so far (including inferred abstention-to-last-candidate) for the in-progress draft. */
     getVoteTallySoFar() {
       const session = this.requireGame();
       if (session.uiPhase.kind !== "voting") throw new GameFacadeError('getVoteTallySoFar() requires the "voting" phase');
@@ -1698,13 +813,6 @@
         votingDraft: { kind: "keepOrEliminateVote", candidates: [...candidates], eliminateHands: [] }
       });
     }
-    /** The current day's round number, valid from any of this day's decision-making sub-phases ("day" itself, an in-progress candidateVote, or an in-progress keepOrEliminateVote) - never from "night" or "finished". */
-    requireDayRound2(session) {
-      if (session.uiPhase.kind === "day" || session.uiPhase.kind === "voting" || session.uiPhase.kind === "keepOrEliminateVoting") {
-        return session.uiPhase.round;
-      }
-      throw new GameFacadeError(`this action requires the "day", "voting", or "keepOrEliminateVoting" phase, current phase is "${session.uiPhase.kind}"`);
-    }
     recordEliminateHands(voters) {
       const session = this.requireGame();
       const draft = this.requireVotingDraft(session, "keepOrEliminateVote");
@@ -1720,7 +828,40 @@
       const alive = this.currentAliveState(withEvent);
       return resolveKeepOrEliminateVote(event, alive);
     }
-    /** Finalizes the day's elimination (possibly empty - "leave everyone") and returns to the "day" phase for the SAME round. */
+    /**
+     * When the "voting"/"keepOrEliminateVoting" phase has no in-progress
+     * draft (votingDraft === null) - either because the vote was just
+     * confirmed, or because Undo removed some later event - tells the UI
+     * what's safe to do next:
+     *  - "noRecordedVote": no vote event for this exact round+stage/kind
+     *    exists yet (a fresh phase, or Undo removed the vote event itself) -
+     *    starting a brand new vote here is safe.
+     *  - "tied": the last recorded vote for this round+stage already exists
+     *    and tied - the existing "move to revote/keep-or-eliminate" UI
+     *    applies, nothing to record yet.
+     *  - "decisive": the last recorded vote for this round already exists
+     *    and resolved decisively (a winner, or eliminateAll/keepAll) -
+     *    `eliminated` is what recordDayElimination() should be called with.
+     *    Starting a NEW vote here instead would append a second vote event
+     *    for the same round+stage, which dayEliminationValidation.ts then
+     *    correctly rejects as an illegal chain - this is how the UI avoids
+     *    ever offering that trap.
+     */
+    getVoteRecoveryState() {
+      const session = this.requireGame();
+      const last = session.eventLog[session.eventLog.length - 1]?.event;
+      const alive = this.currentAliveState(session);
+      if (session.uiPhase.kind === "voting" && last?.type === "candidateVote" && last.round === session.uiPhase.round && last.stage === session.uiPhase.stage) {
+        const outcome = resolveCandidateVote(last, alive);
+        return outcome.kind === "tie" ? { kind: "tied" } : { kind: "decisive", eliminated: [outcome.candidate] };
+      }
+      if (session.uiPhase.kind === "keepOrEliminateVoting" && last?.type === "keepOrEliminateVote" && last.round === session.uiPhase.round) {
+        const outcome = resolveKeepOrEliminateVote(last, alive);
+        return { kind: "decisive", eliminated: outcome.kind === "eliminateAll" ? [...outcome.candidates] : [] };
+      }
+      return { kind: "noRecordedVote" };
+    }
+    /** Finalizes the day's elimination (possibly empty) and returns to the "day" phase for the SAME round. */
     recordDayElimination(eliminated) {
       const session = this.requireGame();
       const round = this.requireDayRound2(session);
@@ -1728,22 +869,22 @@
       this.updateSession({ ...withEvent, uiPhase: { kind: "day", round } });
     }
     // ============================================================
-    // Finish game
+    // Finish game - fully manual, always resumable (see this redesign's own
+    // notes: there is no more world-tracking to auto-suggest a winner from,
+    // and the old auto-suggestion was itself a source of real bugs).
     // ============================================================
-    /** "unknown" unless the CURRENT posterior's nonzero worlds are unanimous - see gameOutcome.ts's getPossibleWorlds (unchanged): a live, incomplete-information game can only be called with certainty when every remaining possible world agrees. */
-    getSuggestedOutcome() {
-      const session = this.requireGame();
-      const worlds = this.currentWorlds(session);
-      const alive = this.currentAliveState(session);
-      const possible = getPossibleWorlds(worlds, alive, defaultRoleRegistry);
-      if (possible.ongoing.length > 0) return "unknown";
-      if (possible.townWon.length > 0 && possible.mafiaWon.length === 0) return "townWon";
-      if (possible.mafiaWon.length > 0 && possible.townWon.length === 0) return "mafiaWon";
-      return "unknown";
-    }
     finishGame(confirmedOutcome) {
       const session = this.requireGame();
-      this.updateSession({ ...session, uiPhase: { kind: "finished" }, confirmedOutcome });
+      const phaseBeforeFinish = session.uiPhase.kind === "finished" ? session.phaseBeforeFinish : session.uiPhase;
+      const finalRoles = session.finalRoles ?? Object.fromEntries(session.config.players.map((p) => [p, p === session.myPlayerNumber && session.myRole ? session.myRole : "citizen"]));
+      this.updateSession({ ...session, uiPhase: { kind: "finished" }, phaseBeforeFinish, confirmedOutcome, finalRoles });
+    }
+    /** Returns to the live game exactly where Finish Game was called from - Finish Game must never be a dead end. */
+    resumeGame() {
+      const session = this.requireGame();
+      if (session.uiPhase.kind !== "finished") throw new GameFacadeError('resumeGame() requires the "finished" phase');
+      if (!session.phaseBeforeFinish) throw new GameFacadeError("no phase to resume to");
+      this.updateSession({ ...session, uiPhase: session.phaseBeforeFinish, phaseBeforeFinish: null });
     }
     setFinalRole(player, role) {
       const session = this.requireGame();
@@ -1755,21 +896,18 @@
     // ============================================================
     /**
      * Undoes the most recently CONFIRMED event: drops it from eventLog and
-     * restores uiPhase to exactly what it was immediately before that event
-     * (stored per-entry - see EventLogEntry). Safe by construction: undo only
-     * ever removes the LAST event, and nothing later in the log can depend on
-     * it (there is nothing later), so the remaining prefix is always a valid
-     * history - re-validated via computeSteps() as a defensive check anyway.
-     * Does NOT touch myRole/finalRoles/confirmedOutcome/votingDraft - those
-     * are simple idempotent setters a caller corrects by calling them again,
-     * not part of the sequential eventLog this method operates on.
+     * restores uiPhase to exactly what it was immediately before that event.
+     * Safe by construction: undo only ever removes the LAST event, and
+     * nothing later in the log can depend on it. Does NOT touch myRole/
+     * finalRoles/confirmedOutcome/votingDraft - those are simple idempotent
+     * setters a caller corrects by calling them again.
      */
     undoLastEvent() {
       const session = this.requireGame();
       if (session.eventLog.length === 0) throw new GameFacadeError("no events to undo");
       const last = session.eventLog[session.eventLog.length - 1];
       const candidate = { ...session, eventLog: session.eventLog.slice(0, -1), uiPhase: last.uiPhaseBefore, votingDraft: null };
-      this.computeSteps(candidate);
+      this.currentAliveState(candidate);
       this.updateSession(candidate);
     }
     canUndo() {
@@ -1777,43 +915,56 @@
       return session.eventLog.length > 0;
     }
     // ============================================================
-    // Read-only predictor views
+    // Read-only relationship views
     // ============================================================
     getEventLog() {
-      return this.requireGame().eventLog.map(({ event }) => ({ event, description: describeEvidence(event) }));
+      return this.requireGame().eventLog.map(({ event }) => ({ event, description: describeGameEvent(event) }));
     }
-    /** Every living player's probabilities, EXCLUDING myPlayerNumber entirely - not merely "the UI shouldn't call this for self", but structurally omitted, per this milestone's "hard to accidentally expose" requirement. */
-    getPublicPlayerProbabilities() {
+    affinityMatrix(session) {
+      return computeAffinityMatrix(session.config.players, session.eventLog.map((e) => e.event));
+    }
+    /**
+     * Arrows (one per individual suspect/nominate/defend action - see
+     * RelationshipArrow's own doc), detected teams (dynamic clustering, see
+     * relations/clustering.ts), and confirmed team facts (see relations/
+     * confirmedFacts.ts) - the UI's single entry point for everything the
+     * player circle and team panel need. EXCLUDES the viewer's own player
+     * from `confirmedTeams`/team membership is not filtered here (the UI
+     * decides how to render its own seat), but confirmedTeams never includes
+     * information the viewer doesn't already know some other way (it is
+     * derived only from the viewer's OWN recorded investigation reports).
+     */
+    getRelationshipView() {
       const session = this.requireGame();
-      const worlds = this.currentWorlds(session);
-      const alive = this.currentAliveState(session);
-      const hasDon = session.config.roles.includes("don");
-      return session.config.players.filter((p) => p !== session.myPlayerNumber).map((player) => ({
-        player,
-        alive: alive[player] === true,
-        mafiaProbability: getExpressionProbability(worlds, player, { kind: "group", group: "mafia" }, defaultGroupRegistry),
-        commissionerProbability: getProbability(worlds, player, "commissioner"),
-        doctorProbability: getProbability(worlds, player, "doctor"),
-        ...hasDon ? { donProbability: getProbability(worlds, player, "don") } : {}
-      }));
+      const events = session.eventLog.map((e) => e.event);
+      const arrows = [];
+      events.forEach((event, i) => {
+        if (event.type === "suspect" || event.type === "nominate") {
+          arrows.push({ id: `${i}`, type: "attack", eventType: event.type, actor: event.actor, target: event.target, round: event.round });
+        } else if (event.type === "defend") {
+          arrows.push({ id: `${i}`, type: "support", eventType: "defend", actor: event.actor, target: event.target, round: event.round });
+        }
+      });
+      const matrix = this.affinityMatrix(session);
+      const teams = detectTeams(session.config.players, matrix).map((members) => ({ members }));
+      const confirmedTeams = deriveConfirmedTeams(events, session.myPlayerNumber, session.myRole, defaultRoleRegistry);
+      return { arrows, teams, confirmedTeams };
     }
-    /** Throws for myPlayerNumber - the caller must never route its own player through the shared "player info" screen (see this milestone's report). */
+    /** Throws for myPlayerNumber - the caller must never route its own player through the shared "player info" screen. */
     getPlayerInfo(player) {
       const session = this.requireGame();
       if (player === session.myPlayerNumber) throw new GameFacadeError("cannot expose your own player info");
-      const worlds = this.currentWorlds(session);
       const alive = this.currentAliveState(session);
-      const hasDon = session.config.roles.includes("don");
       const events = session.eventLog.map((e) => e.event).filter((e) => eventInvolvesPlayer(e, player));
+      const matrix = this.affinityMatrix(session);
+      const confirmedTeams = deriveConfirmedTeams(session.eventLog.map((e) => e.event), session.myPlayerNumber, session.myRole, defaultRoleRegistry);
+      const relationships = session.config.players.filter((p) => p !== player && p !== session.myPlayerNumber).map((other) => ({ other, score: affinityBetween(matrix, player, other) })).filter((r) => r.score !== 0).sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
       return {
         player,
         alive: alive[player] === true,
-        mafiaProbability: getExpressionProbability(worlds, player, { kind: "group", group: "mafia" }, defaultGroupRegistry),
-        commissionerProbability: getProbability(worlds, player, "commissioner"),
-        doctorProbability: getProbability(worlds, player, "doctor"),
-        ...hasDon ? { donProbability: getProbability(worlds, player, "don") } : {},
-        teammateProbabilities: getTeammateProbabilities(worlds, player, session.config.players, defaultRoleRegistry),
-        events: events.map((event) => ({ event, description: describeEvidence(event) }))
+        confirmedTeam: confirmedTeams[player],
+        relationships,
+        events: events.map((event) => ({ event, description: describeGameEvent(event) }))
       };
     }
     // ============================================================
@@ -1833,7 +984,7 @@
     exportHistoryJson() {
       return JSON.stringify(this.state.history, null, 2);
     }
-    /** Wipes ALL persisted application state (menu + any in-progress game + history) - the "Clear All Data" menu action. Reloading the page after this is the caller's (UI's) responsibility. */
+    /** Wipes ALL persisted application state (menu + any in-progress game + history). Reloading the page after this is the caller's (UI's) responsibility. */
     clearAllData() {
       this.state = { schemaVersion: APP_SCHEMA_VERSION, appVersion: this.state.appVersion, currentGame: null, history: [] };
       this.persist();
@@ -1857,48 +1008,30 @@
   }
   function buildGameScreenViewModel(facade2) {
     const session = facade2.getPublicSessionView();
-    const publicProbs = facade2.getPublicPlayerProbabilities();
-    const byPlayer = new Map(publicProbs.map((p) => [p.player, p]));
-    const neutral = facade2.getPriorMafiaProbability();
-    const players = session.config.players.map((player) => {
-      const isMe = player === session.myPlayerNumber;
-      if (isMe) {
-        return { player, isMe: true, alive: true };
-      }
-      const p = byPlayer.get(player);
-      const alive = p?.alive ?? true;
-      return {
-        player,
-        isMe: false,
-        alive,
-        mafiaProbability: p?.mafiaProbability,
-        barStyle: alive && p ? computeProbabilityBarStyle(p.mafiaProbability, neutral) : void 0
-      };
+    const relationships = facade2.getRelationshipView();
+    const allDead = /* @__PURE__ */ new Set();
+    facade2.getEventLog().forEach(({ event }) => {
+      if (event.type === "nightResult") event.died.forEach((d) => allDead.add(d));
+      if (event.type === "dayElimination") event.eliminated.forEach((d) => allDead.add(d));
     });
-    const meAliveEntry = players.find((p) => p.isMe);
-    if (meAliveEntry) {
-      const allDead = /* @__PURE__ */ new Set();
-      facade2.getEventLog().forEach(({ event }) => {
-        if (event.type === "nightResult") event.died.forEach((d) => allDead.add(d));
-        if (event.type === "dayElimination") event.eliminated.forEach((d) => allDead.add(d));
-      });
-      meAliveEntry.alive = !allDead.has(session.myPlayerNumber);
-    }
-    return { phaseLabel: phaseLabel(session.uiPhase), phase: session.uiPhase, players, canUndo: facade2.canUndo() };
+    const players = session.config.players.map((player) => ({
+      player,
+      isMe: player === session.myPlayerNumber,
+      alive: !allDead.has(player),
+      confirmedTeam: relationships.confirmedTeams[player]
+    }));
+    return {
+      phaseLabel: phaseLabel(session.uiPhase),
+      phase: session.uiPhase,
+      players,
+      canUndo: facade2.canUndo(),
+      arrows: relationships.arrows,
+      teams: relationships.teams
+    };
   }
   function buildRoleEntryViewModel(facade2) {
     const session = facade2.getPublicSessionView();
     return { needsRole: !session.hasMyRole, roleOptions: facade2.getRoleOptions() };
-  }
-  function computeProbabilityBarStyle(mafiaProbability, neutral = 0.5) {
-    if (mafiaProbability > neutral) {
-      const span2 = 1 - neutral;
-      const heightPercent2 = span2 > 0 ? (mafiaProbability - neutral) / span2 * 50 : 50;
-      return { direction: "down", color: "mafia", heightPercent: heightPercent2 };
-    }
-    const span = neutral;
-    const heightPercent = span > 0 ? (neutral - mafiaProbability) / span * 50 : 0;
-    return { direction: "up", color: "town", heightPercent };
   }
   function buildHistoryListViewModel(facade2) {
     return facade2.listHistory().map((entry) => ({
@@ -1951,12 +1084,21 @@
   var infoPlayer = null;
   var openHistoryId = null;
   var errorMessage = null;
+  var selectedTeamIndex = null;
   var atMenuOverGame = false;
+  function resetGameUiState() {
+    infoPlayer = null;
+    selectedTeamIndex = null;
+  }
   function el(tag, className, text) {
     const e = document.createElement(tag);
     if (className) e.className = className;
     if (text !== void 0) e.textContent = text;
     return e;
+  }
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag) {
+    return document.createElementNS(SVG_NS, tag);
   }
   function button(label, onClick, className = "btn") {
     const b = el("button", className, label);
@@ -1988,7 +1130,7 @@
     }
     atMenuOverGame = true;
     menuScreen = "MENU";
-    infoPlayer = null;
+    resetGameUiState();
   }
   function backToMenuButton() {
     return button("Back to Menu", goToMenu, "btn btn-back-menu");
@@ -2002,9 +1144,6 @@
       s.appendChild(opt);
     });
     return s;
-  }
-  function playerOptions(players) {
-    return players.map((p) => ({ value: p, label: `Player ${p}` }));
   }
   function render() {
     root.innerHTML = "";
@@ -2059,6 +1198,7 @@
         facade.discardGame();
         atMenuOverGame = false;
         menuScreen = "MENU";
+        resetGameUiState();
       }, "btn btn-danger btn-huge"));
     }
     c.appendChild(actions);
@@ -2161,6 +1301,7 @@
         facade.createGame({ playerCount: setupDraft.playerCount, myPlayerNumber: setupDraft.myPlayerNumber, roleCounts: setupDraft.roleCounts });
         menuScreen = "MENU";
         atMenuOverGame = false;
+        resetGameUiState();
       },
       "btn btn-primary btn-huge"
     );
@@ -2182,6 +1323,154 @@
     c.appendChild(grid);
     root.appendChild(c);
   }
+  function circlePosition(index, count) {
+    const radiusPct = 42;
+    const angle = 2 * Math.PI * index / count - Math.PI / 2;
+    return { left: 50 + radiusPct * Math.cos(angle), top: 50 + radiusPct * Math.sin(angle) };
+  }
+  function arrowEndpoints(a, b) {
+    const t0 = 0.14;
+    const t1 = 0.86;
+    return {
+      x1: a.left + (b.left - a.left) * t0,
+      y1: a.top + (b.top - a.top) * t0,
+      x2: a.left + (b.left - a.left) * t1,
+      y2: a.top + (b.top - a.top) * t1
+    };
+  }
+  function buildArrowsSvg(vm, positions) {
+    const svg = svgEl("svg");
+    svg.setAttribute("class", "arrows-svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    const defs = svgEl("defs");
+    ["attack", "support"].forEach((kind) => {
+      const marker = svgEl("marker");
+      marker.setAttribute("id", `arrowhead-${kind}`);
+      marker.setAttribute("viewBox", "0 0 10 10");
+      marker.setAttribute("refX", "8");
+      marker.setAttribute("refY", "5");
+      marker.setAttribute("markerWidth", "5");
+      marker.setAttribute("markerHeight", "5");
+      marker.setAttribute("orient", "auto-start-reverse");
+      const path = svgEl("path");
+      path.setAttribute("d", "M0,0 L10,5 L0,10 z");
+      path.setAttribute("class", kind === "attack" ? "arrowhead-attack" : "arrowhead-support");
+      marker.appendChild(path);
+      defs.appendChild(marker);
+    });
+    svg.appendChild(defs);
+    const selectedTeam = selectedTeamIndex !== null ? vm.teams[selectedTeamIndex] : null;
+    vm.arrows.forEach((arrow) => {
+      const a = positions.get(arrow.actor);
+      const b = positions.get(arrow.target);
+      if (!a || !b) return;
+      const { x1, y1, x2, y2 } = arrowEndpoints(a, b);
+      const line = svgEl("line");
+      line.setAttribute("x1", String(x1));
+      line.setAttribute("y1", String(y1));
+      line.setAttribute("x2", String(x2));
+      line.setAttribute("y2", String(y2));
+      line.setAttribute("vector-effect", "non-scaling-stroke");
+      line.setAttribute("marker-end", `url(#arrowhead-${arrow.type})`);
+      let cls = `arrow-line ${arrow.type === "attack" ? "arrow-attack" : "arrow-support"}`;
+      if (selectedTeam) cls += selectedTeam.members.includes(arrow.actor) ? " arrow-solid" : " arrow-dim";
+      line.setAttribute("class", cls);
+      svg.appendChild(line);
+    });
+    return svg;
+  }
+  function buildTeamPanel(vm) {
+    const panel = el("div", "team-panel");
+    panel.appendChild(el("h3", "subtitle", "Detected Teams"));
+    const multiTeamIndices = vm.teams.map((_, i) => i).filter((i) => vm.teams[i].members.length >= 2);
+    const singleCount = vm.teams.length - multiTeamIndices.length;
+    if (multiTeamIndices.length === 0) {
+      panel.appendChild(el("p", "hint", "No cooperation/opposition patterns detected yet."));
+    } else {
+      const grid = el("div", "actions-row actions-wrap");
+      multiTeamIndices.forEach((i) => {
+        const team = vm.teams[i];
+        const selected = selectedTeamIndex === i;
+        grid.appendChild(
+          button(
+            `Team: ${team.members.join(", ")}`,
+            () => {
+              selectedTeamIndex = selected ? null : i;
+            },
+            "btn team-chip" + (selected ? " player-select-btn-selected" : "")
+          )
+        );
+      });
+      panel.appendChild(grid);
+    }
+    if (singleCount > 0) {
+      panel.appendChild(el("p", "hint", `${singleCount} player(s) not yet showing a clear pattern.`));
+    }
+    return panel;
+  }
+  function attachDragHandlers(node, actor, isMe, circle) {
+    node.addEventListener("pointerdown", (downEvent) => {
+      downEvent.preventDefault();
+      const startX = downEvent.clientX;
+      const startY = downEvent.clientY;
+      let dragging = false;
+      let ghost = null;
+      let centerTarget = null;
+      let hovered = null;
+      function beginDrag() {
+        dragging = true;
+        ghost = el("div", "drag-ghost", "\u{1F464}");
+        document.body.appendChild(ghost);
+        centerTarget = el("div", "player-node center-drop-target");
+        centerTarget.dataset.dropTarget = "self";
+        centerTarget.appendChild(el("div", "player-icon", "\u{1F464}"));
+        centerTarget.appendChild(el("div", "player-number", actor));
+        circle.appendChild(centerTarget);
+      }
+      function findDropTarget(x, y) {
+        const under = document.elementFromPoint(x, y);
+        return under?.closest("[data-player],[data-drop-target]") ?? null;
+      }
+      function onMove(moveEvent) {
+        if (!dragging) {
+          if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 10) return;
+          beginDrag();
+        }
+        if (ghost) {
+          ghost.style.left = `${moveEvent.clientX}px`;
+          ghost.style.top = `${moveEvent.clientY}px`;
+        }
+        if (hovered) hovered.classList.remove("drop-hover");
+        const target = findDropTarget(moveEvent.clientX, moveEvent.clientY);
+        hovered = target && target !== node ? target : null;
+        if (hovered) hovered.classList.add("drop-hover");
+      }
+      function onUp(upEvent) {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const target = dragging ? findDropTarget(upEvent.clientX, upEvent.clientY) : null;
+        if (hovered) hovered.classList.remove("drop-hover");
+        if (ghost) ghost.remove();
+        if (centerTarget) centerTarget.remove();
+        if (!dragging) {
+          if (!isMe) {
+            infoPlayer = actor;
+            render();
+          }
+          return;
+        }
+        if (!target) return;
+        if (target.dataset.dropTarget === "self") {
+          showSelfClaimPopup(actor);
+        } else if (target.dataset.player && target.dataset.player !== actor) {
+          showActionTypePopup(actor, target.dataset.player);
+        }
+      }
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+  }
   function renderMainGameScreen() {
     const vm = buildGameScreenViewModel(facade);
     const c = el("div", "screen game-screen");
@@ -2191,45 +1480,39 @@
     if (vm.canUndo) header.appendChild(button("Undo", () => facade.undoLastEvent(), "btn btn-undo"));
     c.appendChild(header);
     const circle = el("div", "player-circle");
-    const radiusPct = 42;
-    vm.players.forEach((p, i) => {
-      const node = el("div", "player-node" + (p.isMe ? " player-node-me" : "") + (p.alive ? "" : " player-node-dead"));
-      const angle = 2 * Math.PI * i / vm.players.length - Math.PI / 2;
-      const left = 50 + radiusPct * Math.cos(angle);
-      const top = 50 + radiusPct * Math.sin(angle);
-      node.style.left = `${left}%`;
-      node.style.top = `${top}%`;
+    const positions = /* @__PURE__ */ new Map();
+    vm.players.forEach((p, i) => positions.set(p.player, circlePosition(i, vm.players.length)));
+    circle.appendChild(buildArrowsSvg(vm, positions));
+    vm.players.forEach((p) => {
+      const pos = positions.get(p.player);
+      const node = el(
+        "div",
+        "player-node" + (p.isMe ? " player-node-me" : "") + (p.alive ? "" : " player-node-dead") + (p.confirmedTeam === "mafia" ? " player-node-confirmed-mafia" : "") + (p.confirmedTeam === "town" ? " player-node-confirmed-town" : "")
+      );
+      node.dataset.player = p.player;
+      node.style.left = `${pos.left}%`;
+      node.style.top = `${pos.top}%`;
       node.appendChild(el("div", "player-icon", p.alive ? "\u{1F464}" : "\u{1F480}"));
       node.appendChild(el("div", "player-number", p.player));
-      if (!p.isMe) {
-        if (p.alive && p.barStyle) {
-          const bar = el("div", "prob-bar");
-          const fill = el("div", "prob-bar-fill");
-          fill.style.height = `${p.barStyle.heightPercent}%`;
-          if (p.barStyle.direction === "down") {
-            fill.style.top = "50%";
-          } else {
-            fill.style.bottom = "50%";
-          }
-          fill.classList.add(p.barStyle.color === "mafia" ? "prob-bar-mafia" : "prob-bar-town");
-          bar.appendChild(fill);
-          node.appendChild(bar);
-        }
+      if (p.isMe) node.appendChild(el("div", "you-label", "you"));
+      if (p.alive) {
+        attachDragHandlers(node, p.player, p.isMe, circle);
+      } else if (!p.isMe) {
         node.onclick = () => {
           infoPlayer = p.player;
           render();
         };
-      } else {
-        node.appendChild(el("div", "you-label", "you"));
       }
       circle.appendChild(node);
     });
     c.appendChild(circle);
+    c.appendChild(el("p", "hint", "Drag from a player onto another to record an action or claim - drag onto the center icon to make a claim about themselves."));
+    c.appendChild(buildTeamPanel(vm));
     const actions = el("div", "actions-row actions-wrap");
-    actions.appendChild(overlayButton("Record Action / Claim", () => renderEventEntryOverlay(), "btn btn-primary"));
     actions.appendChild(overlayButton("Start Voting", () => renderStartVotingOverlay(), "btn"));
     actions.appendChild(button("Start Night", () => facade.startNight(), "btn"));
-    actions.appendChild(button("Finish Game", () => facade.finishGame(facade.getSuggestedOutcome()), "btn btn-danger"));
+    actions.appendChild(overlayButton("Action History", () => renderActionHistoryModal(), "btn"));
+    actions.appendChild(overlayButton("Finish Game", () => renderFinishGameOutcomePopup(), "btn btn-danger"));
     c.appendChild(actions);
     root.appendChild(c);
     if (infoPlayer) renderPlayerInfoModal(infoPlayer);
@@ -2241,14 +1524,18 @@
       const info = facade.getPlayerInfo(player);
       box.appendChild(el("h3", "title", `Player ${player}`));
       box.appendChild(el("div", "info-row", `Alive: ${info.alive ? "yes" : "no"}`));
-      box.appendChild(el("div", "info-row", `P(Mafia): ${(info.mafiaProbability * 100).toFixed(1)}%`));
-      box.appendChild(el("div", "info-row", `P(Commissioner): ${(info.commissionerProbability * 100).toFixed(1)}%`));
-      box.appendChild(el("div", "info-row", `P(Doctor): ${(info.doctorProbability * 100).toFixed(1)}%`));
-      if (info.donProbability !== void 0) box.appendChild(el("div", "info-row", `P(Don): ${(info.donProbability * 100).toFixed(1)}%`));
-      box.appendChild(el("h4", "subtitle", "Teammate probability"));
-      Object.entries(info.teammateProbabilities).forEach(([other, prob]) => {
-        box.appendChild(el("div", "info-row", `Same team as ${other}: ${(prob * 100).toFixed(1)}%`));
-      });
+      if (info.confirmedTeam) {
+        box.appendChild(el("div", "info-row confirmed-banner", `CONFIRMED: ${info.confirmedTeam === "mafia" ? "Mafia" : "Town"}`));
+      }
+      box.appendChild(el("h4", "subtitle", "Relationships"));
+      if (info.relationships.length === 0) {
+        box.appendChild(el("div", "info-row hint", "no signal yet"));
+      } else {
+        info.relationships.forEach((r) => {
+          const sign = r.score > 0 ? "+" : "";
+          box.appendChild(el("div", "info-row", `Player ${r.other}: ${sign}${r.score} (${r.score > 0 ? "cooperating" : "opposed"})`));
+        });
+      }
       box.appendChild(el("h4", "subtitle", "Events involving this player"));
       if (info.events.length === 0) box.appendChild(el("div", "info-row hint", "none yet"));
       info.events.forEach((e) => box.appendChild(el("div", "info-row", e.description)));
@@ -2265,113 +1552,16 @@
     overlay.appendChild(box);
     root.appendChild(overlay);
   }
-  function renderEventEntryOverlay() {
-    const session = facade.getPublicSessionView();
-    const alivePlayers = buildGameScreenViewModel(facade).players.filter((p) => p.alive).map((p) => p.player);
+  function renderActionHistoryModal() {
     const overlay = el("div", "modal-overlay");
     const box = el("div", "modal-box");
-    box.appendChild(backToMenuButton());
-    box.appendChild(el("h3", "title", "Record Action / Claim"));
-    const actorRow = el("div", "field-row");
-    actorRow.appendChild(el("label", "field-label", "Actor"));
-    const actorSelect = selectEl(playerOptions(alivePlayers));
-    actorRow.appendChild(actorSelect);
-    box.appendChild(actorRow);
-    const typeRow = el("div", "field-row");
-    typeRow.appendChild(el("label", "field-label", "Action"));
-    const typeSelect = selectEl([
-      { value: "suspect", label: "Suspect" },
-      { value: "defend", label: "Defend" },
-      { value: "nominate", label: "Nominate" },
-      { value: "selfRoleClaim", label: "Claim: I am..." },
-      { value: "roleAssertion", label: "Claim: another player is..." },
-      { value: "investigationReport", label: "Claim: investigation result" }
-    ]);
-    typeRow.appendChild(typeSelect);
-    box.appendChild(typeRow);
-    const detailContainer = el("div", "detail-container");
-    box.appendChild(detailContainer);
-    function renderDetails() {
-      detailContainer.innerHTML = "";
-      const type = typeSelect.value;
-      if (type === "suspect" || type === "defend" || type === "nominate") {
-        const targetRow = el("div", "field-row");
-        targetRow.appendChild(el("label", "field-label", "Target"));
-        const targetSelect = selectEl(playerOptions(alivePlayers));
-        targetRow.appendChild(targetSelect);
-        detailContainer.appendChild(targetRow);
-        detailContainer.dataset.getTarget = "1";
-        detailContainer._targetSelect = targetSelect;
-      } else if (type === "selfRoleClaim") {
-        const claimSelect = roleClaimSelect(session);
-        const row = el("div", "field-row");
-        row.appendChild(el("label", "field-label", "Claims to be"));
-        row.appendChild(claimSelect);
-        detailContainer.appendChild(row);
-        detailContainer._claimSelect = claimSelect;
-      } else if (type === "roleAssertion") {
-        const targetRow = el("div", "field-row");
-        targetRow.appendChild(el("label", "field-label", "About player"));
-        const targetSelect = selectEl(playerOptions(session.config.players.filter((p) => p !== actorSelect.value)));
-        targetRow.appendChild(targetSelect);
-        detailContainer.appendChild(targetRow);
-        const claimSelect = roleClaimSelect(session);
-        const row = el("div", "field-row");
-        row.appendChild(el("label", "field-label", "Claims they are"));
-        row.appendChild(claimSelect);
-        detailContainer.appendChild(row);
-        detailContainer._targetSelect = targetSelect;
-        detailContainer._claimSelect = claimSelect;
-      } else if (type === "investigationReport") {
-        const targetRow = el("div", "field-row");
-        targetRow.appendChild(el("label", "field-label", "Target"));
-        const targetSelect = selectEl(playerOptions(session.config.players.filter((p) => p !== actorSelect.value)));
-        targetRow.appendChild(targetSelect);
-        detailContainer.appendChild(targetRow);
-        const mechRow = el("div", "field-row");
-        mechRow.appendChild(el("label", "field-label", "Mechanic"));
-        const mechSelect = selectEl([
-          { value: "checkIsCommissioner", label: "Check Is Commissioner (Don)" },
-          { value: "checkIsMafia", label: "Check Is Mafia (Commissioner)" }
-        ]);
-        mechRow.appendChild(mechSelect);
-        detailContainer.appendChild(mechRow);
-        const resultRow = el("div", "field-row");
-        resultRow.appendChild(el("label", "field-label", "Result"));
-        const resultSelect = selectEl([{ value: "true", label: "Yes" }, { value: "false", label: "No" }]);
-        resultRow.appendChild(resultSelect);
-        detailContainer.appendChild(resultRow);
-        detailContainer._targetSelect = targetSelect;
-        detailContainer._mechSelect = mechSelect;
-        detailContainer._resultSelect = resultSelect;
-      }
-    }
-    typeSelect.onchange = renderDetails;
-    actorSelect.onchange = renderDetails;
-    renderDetails();
-    const actions = el("div", "actions-row");
-    actions.appendChild(button("Cancel", () => render()));
-    actions.appendChild(
-      button(
-        "Confirm",
-        () => {
-          const actor = actorSelect.value;
-          const type = typeSelect.value;
-          const d = detailContainer;
-          if (type === "suspect" || type === "defend" || type === "nominate") {
-            facade.recordAction(actor, type, d._targetSelect.value);
-          } else if (type === "selfRoleClaim") {
-            facade.recordSelfRoleClaim(actor, d._claimSelect.value === "" ? { kind: "group", group: "town" } : parseClaim(d._claimSelect.value));
-          } else if (type === "roleAssertion") {
-            facade.recordRoleAssertion(actor, d._targetSelect.value, parseClaim(d._claimSelect.value));
-          } else if (type === "investigationReport") {
-            facade.recordInvestigationReport(actor, d._targetSelect.value, d._mechSelect.value, d._resultSelect.value === "true");
-          }
-        },
-        "btn btn-primary btn-huge"
-      )
-    );
-    box.appendChild(actions);
+    box.appendChild(el("h3", "title", "Action History"));
+    const log = facade.getEventLog();
+    const list = el("div", "event-log");
+    if (log.length === 0) list.appendChild(el("div", "info-row hint", "No events recorded yet."));
+    log.forEach((entry, i) => list.appendChild(el("div", "info-row", `${i + 1}. ${entry.description}`)));
+    box.appendChild(list);
+    box.appendChild(button("Close", () => render(), "btn btn-huge"));
     overlay.appendChild(box);
     root.appendChild(overlay);
   }
@@ -2387,6 +1577,112 @@
   function parseClaim(value) {
     const [kind, name] = value.split(":");
     return kind === "role" ? { kind: "role", role: name } : { kind: "group", group: name };
+  }
+  function buildStarPicker(current, onChange) {
+    const row = el("div", "star-picker");
+    for (let n = 1; n <= 5; n++) {
+      const star = overlayButton(n <= current ? "\u2605" : "\u2606", () => onChange(n), "btn star-btn" + (n <= current ? " star-btn-filled" : ""));
+      row.appendChild(star);
+    }
+    return row;
+  }
+  function showActionTypePopup(actor, target) {
+    const session = facade.getPublicSessionView();
+    let step = "menu";
+    let intensity = 3;
+    const overlay = el("div", "modal-overlay");
+    const box = el("div", "modal-box");
+    function redraw() {
+      box.innerHTML = "";
+      box.appendChild(el("h3", "title", `Player ${actor} \u2192 Player ${target}`));
+      if (step === "menu") {
+        box.appendChild(el("p", "hint", "Confidence (used by Suspect/Defend/Nominate only):"));
+        box.appendChild(buildStarPicker(intensity, (n) => {
+          intensity = n;
+          redraw();
+        }));
+        const typeGrid = el("div", "actions-row actions-wrap");
+        ["suspect", "defend", "nominate"].forEach((type) => {
+          const label = type[0].toUpperCase() + type.slice(1);
+          typeGrid.appendChild(button(label, () => facade.recordAction(actor, type, target, intensity), "btn btn-huge"));
+        });
+        box.appendChild(typeGrid);
+        const claimsRow = el("div", "actions-row actions-wrap");
+        claimsRow.appendChild(overlayButton("Claim Role...", () => {
+          step = "roleAssertion";
+          redraw();
+        }, "btn"));
+        claimsRow.appendChild(overlayButton("Investigation Report...", () => {
+          step = "investigationReport";
+          redraw();
+        }, "btn"));
+        box.appendChild(claimsRow);
+        box.appendChild(button("Cancel", () => render()));
+      } else if (step === "roleAssertion") {
+        box.appendChild(el("p", "hint", `Player ${actor} claims Player ${target} is...`));
+        const claimSelect = roleClaimSelect(session);
+        box.appendChild(claimSelect);
+        const actions = el("div", "actions-row");
+        actions.appendChild(overlayButton("Back", () => {
+          step = "menu";
+          redraw();
+        }));
+        actions.appendChild(button("Confirm", () => facade.recordRoleAssertion(actor, target, parseClaim(claimSelect.value)), "btn btn-primary btn-huge"));
+        box.appendChild(actions);
+      } else {
+        box.appendChild(el("p", "hint", `Player ${actor} claims to have investigated Player ${target}...`));
+        const mechSelect = selectEl([
+          { value: "checkIsCommissioner", label: "Check Is Commissioner (Don)" },
+          { value: "checkIsMafia", label: "Check Is Mafia (Commissioner)" }
+        ]);
+        box.appendChild(mechSelect);
+        const resultSelect = selectEl([{ value: "true", label: "Yes" }, { value: "false", label: "No" }]);
+        box.appendChild(resultSelect);
+        const actions = el("div", "actions-row");
+        actions.appendChild(overlayButton("Back", () => {
+          step = "menu";
+          redraw();
+        }));
+        actions.appendChild(
+          button(
+            "Confirm",
+            () => facade.recordInvestigationReport(actor, target, mechSelect.value, resultSelect.value === "true"),
+            "btn btn-primary btn-huge"
+          )
+        );
+        box.appendChild(actions);
+      }
+    }
+    redraw();
+    overlay.appendChild(box);
+    root.appendChild(overlay);
+  }
+  function showSelfClaimPopup(actor) {
+    const session = facade.getPublicSessionView();
+    const overlay = el("div", "modal-overlay");
+    const box = el("div", "modal-box");
+    box.appendChild(el("h3", "title", `Player ${actor} claims...`));
+    const claimSelect = roleClaimSelect(session);
+    box.appendChild(claimSelect);
+    const actions = el("div", "actions-row");
+    actions.appendChild(button("Cancel", () => render()));
+    actions.appendChild(button("Confirm", () => facade.recordSelfRoleClaim(actor, parseClaim(claimSelect.value)), "btn btn-primary btn-huge"));
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    root.appendChild(overlay);
+  }
+  function renderFinishGameOutcomePopup() {
+    const overlay = el("div", "modal-overlay");
+    const box = el("div", "modal-box");
+    box.appendChild(el("h3", "title", "Who won?"));
+    const grid = el("div", "actions-row actions-wrap");
+    grid.appendChild(button("Town Won", () => facade.finishGame("townWon"), "btn btn-huge"));
+    grid.appendChild(button("Mafia Won", () => facade.finishGame("mafiaWon"), "btn btn-huge"));
+    box.appendChild(grid);
+    box.appendChild(button("Not Sure / Skip For Now", () => facade.finishGame("unknown")));
+    box.appendChild(button("Cancel", () => render()));
+    overlay.appendChild(box);
+    root.appendChild(overlay);
   }
   var deathSelection = /* @__PURE__ */ new Set();
   function renderDeathEntry() {
@@ -2415,6 +1711,16 @@
           deathSelection.clear();
         },
         "btn btn-primary btn-huge"
+      )
+    );
+    actions.appendChild(
+      button(
+        "Cancel Night (back to Day)",
+        () => {
+          facade.cancelCurrentSubPhase();
+          deathSelection.clear();
+        },
+        "btn"
       )
     );
     c.appendChild(actions);
@@ -2464,24 +1770,36 @@
     c.appendChild(el("h2", "title", phase.stage === "initial" ? "Voting" : "Revote"));
     const noDraft = session.votingDraft === null;
     if (noDraft) {
-      c.appendChild(el("p", "hint", "No votes are recorded for this round right now (either it just tied, or a vote/elimination was undone)."));
-      const restartActions = el("div", "actions-row");
-      restartActions.appendChild(
-        button(
-          "Restart This Vote",
-          () => facade.startVoting(phase.stage, phase.candidates),
-          "btn btn-primary btn-huge"
-        )
-      );
-      c.appendChild(restartActions);
-      c.appendChild(el("p", "hint", "If this round genuinely tied, move on instead:"));
-      const tieActions = el("div", "actions-row");
-      if (phase.stage === "initial") {
-        tieActions.appendChild(overlayButton("Start Revote (tied candidates)", () => renderTieFollowupOverlay("revote"), "btn"));
+      const recovery = facade.getVoteRecoveryState();
+      if (recovery.kind === "tied") {
+        c.appendChild(el("p", "hint", "This round tied - move on to resolve it:"));
+        const tieActions = el("div", "actions-row");
+        if (phase.stage === "initial") {
+          tieActions.appendChild(overlayButton("Start Revote (tied candidates)", () => renderTieFollowupOverlay("revote"), "btn"));
+        } else {
+          tieActions.appendChild(overlayButton("Start Keep/Eliminate Vote", () => renderTieFollowupOverlay("keepOrEliminate"), "btn"));
+        }
+        c.appendChild(tieActions);
+      } else if (recovery.kind === "decisive") {
+        const eliminated = recovery.eliminated;
+        c.appendChild(el("p", "hint", "This round's vote already decided an outcome (its elimination was undone) - record it again:"));
+        c.appendChild(
+          button(
+            eliminated.length > 0 ? `Record Elimination: ${eliminated.join(", ")}` : "Record: Nobody Eliminated",
+            () => facade.recordDayElimination(eliminated),
+            "btn btn-primary btn-huge"
+          )
+        );
       } else {
-        tieActions.appendChild(overlayButton("Start Keep/Eliminate Vote", () => renderTieFollowupOverlay("keepOrEliminate"), "btn"));
+        c.appendChild(el("p", "hint", "No votes are recorded for this round right now."));
+        c.appendChild(
+          button(
+            "Restart This Vote",
+            () => facade.startVoting(phase.stage, phase.candidates),
+            "btn btn-primary btn-huge"
+          )
+        );
       }
-      c.appendChild(tieActions);
       root.appendChild(c);
       return;
     }
@@ -2534,6 +1852,13 @@
         "btn btn-primary btn-huge"
       )
     );
+    actions.appendChild(
+      button(
+        phase.stage === "initial" ? "Cancel Vote (back to Day)" : "Cancel Revote (back to tied vote)",
+        () => facade.cancelCurrentSubPhase(),
+        "btn"
+      )
+    );
     c.appendChild(actions);
     root.appendChild(c);
   }
@@ -2581,6 +1906,25 @@
     const c = el("div", "screen voting-screen");
     c.appendChild(backToMenuButton());
     c.appendChild(el("h2", "title", `Keep or Eliminate: ${phase.candidates.join(", ")}`));
+    if (!draft) {
+      const recovery = facade.getVoteRecoveryState();
+      if (recovery.kind === "decisive") {
+        const eliminated = recovery.eliminated;
+        c.appendChild(el("p", "hint", "This vote already decided an outcome (its elimination was undone) - record it again:"));
+        c.appendChild(
+          button(
+            eliminated.length > 0 ? `Record Elimination: ${eliminated.join(", ")}` : "Record: Nobody Eliminated",
+            () => facade.recordDayElimination(eliminated),
+            "btn btn-primary btn-huge"
+          )
+        );
+      } else {
+        c.appendChild(el("p", "hint", "No hands are recorded for this keep-or-eliminate vote right now."));
+        c.appendChild(button("Restart This Vote", () => facade.startKeepOrEliminateVote(phase.candidates), "btn btn-primary btn-huge"));
+      }
+      root.appendChild(c);
+      return;
+    }
     c.appendChild(el("p", "hint", "Select every player who votes to ELIMINATE all listed candidates."));
     const grid = el("div", "player-select-grid");
     const selected = new Set(draft?.eliminateHands ?? []);
@@ -2605,6 +1949,7 @@
         "btn btn-primary btn-huge"
       )
     );
+    actions.appendChild(button("Cancel (back to tied revote)", () => facade.cancelCurrentSubPhase(), "btn"));
     c.appendChild(actions);
     root.appendChild(c);
   }
@@ -2618,13 +1963,15 @@
     const c = el("div", "screen finish-screen");
     c.appendChild(backToMenuButton());
     c.appendChild(el("h2", "title", "Game Finished"));
+    c.appendChild(el("p", "hint", "Finish Game is never a dead end - resume the game if it isn't actually over."));
+    c.appendChild(button("Resume Game", () => facade.resumeGame(), "btn btn-huge"));
     const outcomeRow = el("div", "field-row");
     outcomeRow.appendChild(el("label", "field-label", "Result"));
     const outcomeSelect = selectEl(OUTCOME_OPTIONS, session.confirmedOutcome ?? "unknown");
     outcomeSelect.onchange = () => safely(() => facade.finishGame(outcomeSelect.value));
     outcomeRow.appendChild(outcomeSelect);
     c.appendChild(outcomeRow);
-    c.appendChild(el("p", "hint", "The engine's own suggestion is pre-selected when it has one - confirm it or pick a different result."));
+    c.appendChild(el("p", "hint", "Pick the actual result - there is no automatic suggestion anymore."));
     c.appendChild(el("h3", "subtitle", "Enter each player's actual final role"));
     session.config.players.forEach((player) => {
       const row = el("div", "field-row");
@@ -2642,6 +1989,7 @@
           facade.saveGameToHistory();
           menuScreen = "MENU";
           atMenuOverGame = false;
+          resetGameUiState();
         },
         "btn btn-primary btn-huge"
       )
@@ -2654,6 +2002,7 @@
           facade.discardGame();
           menuScreen = "MENU";
           atMenuOverGame = false;
+          resetGameUiState();
         },
         "btn btn-danger btn-huge"
       )
@@ -2671,9 +2020,26 @@
         c.appendChild(el("h3", "subtitle", `Game from ${new Date(entry.savedAt).toLocaleString()}`));
         c.appendChild(el("div", "info-row", `Players: ${entry.session.config.players.length}`));
         c.appendChild(el("div", "info-row", `Result: ${entry.session.confirmedOutcome ?? "unknown"}`));
+        c.appendChild(
+          el(
+            "div",
+            "info-row",
+            `You were Player ${entry.session.myPlayerNumber}${entry.session.myRole ? ` (${entry.session.myRole})` : ""}`
+          )
+        );
+        c.appendChild(el("h4", "subtitle", "Final roles"));
+        const roles = el("div", "event-log");
+        entry.session.config.players.forEach((player) => {
+          const role = entry.session.finalRoles?.[player];
+          const isMe = player === entry.session.myPlayerNumber;
+          roles.appendChild(el("div", "info-row", `Player ${player}${isMe ? " (you)" : ""}: ${role ?? "not recorded"}`));
+        });
+        c.appendChild(roles);
+        c.appendChild(el("h4", "subtitle", "Event log"));
         const log = el("div", "event-log");
+        if (entry.session.eventLog.length === 0) log.appendChild(el("div", "info-row hint", "no events recorded"));
         entry.session.eventLog.forEach(({ event }, i) => {
-          log.appendChild(el("div", "info-row", `${i + 1}. ${event.type} (round ${event.round})`));
+          log.appendChild(el("div", "info-row", `${i + 1}. ${describeGameEvent(event)}`));
         });
         c.appendChild(log);
         c.appendChild(button("Delete this game", () => {

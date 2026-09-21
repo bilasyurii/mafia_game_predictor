@@ -1,28 +1,22 @@
-import { GameConfig, PlayerId, RoleExpression, RoleId } from "../types";
-import { Evidence } from "../evidence";
+import { GameConfig, GameEvent, PlayerId, RoleExpression, RoleId } from "../types";
 
 /**
  * Application-state shapes for the UI/facade layer (see gameFacade.ts).
  * Nothing here performs inference: these are plain, serializable records the
- * facade reads/writes. The Bayesian core (types.ts/evidence.ts/roles.ts/
- * processEvidence.ts/etc.) is completely unaware this file exists.
+ * facade reads/writes.
  *
- * `events: Evidence[]` is the ONE authoritative source of truth for
- * everything the predictor knows about an in-progress game - see
- * gameFacade.ts's own top-of-file doc for why the posterior is always
- * recomputed from it (never persisted directly).
+ * `eventLog: GameEvent[]` is the ONE authoritative source of truth for
+ * everything this app knows about an in-progress game - the relationship
+ * graph (src/relations/) is always recomputed from it, never persisted
+ * directly, exactly like undo already relies on for the event log itself.
  */
 
-/** Bumped whenever THIS file's shapes change in a way that requires migration (see storage.ts). */
-export const APP_SCHEMA_VERSION = 1;
+/** Bumped whenever THIS file's shapes change in a way that requires migration (see storage.ts). Bumped to 2 for the relationship-based redesign - a schema-1 (Bayesian-era) save is a different, incompatible shape and is not migrated. */
+export const APP_SCHEMA_VERSION = 2;
 
-/** Identifies the exact BehavioralModelParams/ActionModel combination a game was (or is being) scored with - stored per game so a future engine change can detect it needs migration/re-scoring, without guessing. */
-export type PredictorVersion = string;
-export const CURRENT_PREDICTOR_VERSION: PredictorVersion = "default-flat-v1";
-
-/** Identifies the core engine's own logic (types.ts/roles.ts/evidence shapes) - bumped on any change that could change how an old game's events replay. */
+/** Identifies the core engine's own logic (types.ts/roles.ts/relations/*) - bumped on any change that could change how an old game's events replay or how the relationship graph is computed. */
 export type EngineVersion = string;
-export const CURRENT_ENGINE_VERSION: EngineVersion = "1.0.0";
+export const CURRENT_ENGINE_VERSION: EngineVersion = "2.0.0";
 
 export interface RoleCounts {
   don: number;
@@ -36,8 +30,7 @@ export interface RoleCounts {
  * The app's own default role-count POLICY (9+ players -> 2 Mafia; <=8 -> 1
  * Mafia; Commissioner/Doctor/Don always exactly 1; remainder Citizens) -
  * deliberately kept as plain, versionable data/logic here rather than
- * hardcoded in a UI component, so a future version can change the policy
- * (and record which policy an old saved game used) without touching the UI.
+ * hardcoded in a UI component.
  */
 export function defaultRoleCountsForPlayerCount(playerCount: number): RoleCounts {
   return {
@@ -49,7 +42,7 @@ export function defaultRoleCountsForPlayerCount(playerCount: number): RoleCounts
   };
 }
 
-/** Expands RoleCounts + a player count into an actual GameConfig - player ids are "1".."N" in order, matching every existing example (game1.ts/game2.ts). */
+/** Expands RoleCounts + a player count into an actual GameConfig - player ids are "1".."N" in order. */
 export function buildGameConfig(playerCount: number, counts: RoleCounts): GameConfig {
   const roles: RoleId[] = [
     ...Array(counts.don).fill("don"),
@@ -70,9 +63,9 @@ export interface GameSetupInput {
 
 /**
  * The UI's current workflow position within a game - NOT fully derivable
- * from `events` alone (e.g. "night has started but deaths aren't recorded
- * yet" has no corresponding Evidence item), so tracked explicitly alongside
- * the event log rather than re-inferred from it.
+ * from `eventLog` alone (e.g. "night has started but deaths aren't
+ * recorded yet" has no corresponding GameEvent), so tracked explicitly
+ * alongside the event log rather than re-inferred from it.
  */
 export type UiPhase =
   | { kind: "day"; round: number }
@@ -81,7 +74,7 @@ export type UiPhase =
   | { kind: "keepOrEliminateVoting"; round: number; candidates: PlayerId[] }
   | { kind: "finished" };
 
-/** In-progress, UNCONFIRMED voting selections - never fed to the engine until confirmVote()/confirmKeepOrEliminateVote() builds the real Evidence event. Persisted so a mid-vote refresh doesn't lose progress. */
+/** In-progress, UNCONFIRMED voting selections - never fed to the engine until confirmVote()/confirmKeepOrEliminateVote() builds the real GameEvent. Persisted so a mid-vote refresh doesn't lose progress. */
 export interface CandidateVoteDraft {
   kind: "candidateVote";
   candidates: PlayerId[];
@@ -94,27 +87,33 @@ export interface KeepOrEliminateDraft {
 }
 export type VotingDraft = CandidateVoteDraft | KeepOrEliminateDraft;
 
-/** One entry in the authoritative event log: the Evidence item itself, plus the UiPhase that was active immediately BEFORE it - lets undoLastEvent() restore uiPhase exactly, without re-deriving a reverse transition from the event's type. */
+/** One entry in the authoritative event log: the GameEvent itself, plus the UiPhase that was active immediately BEFORE it - lets undoLastEvent() restore uiPhase exactly, without re-deriving a reverse transition from the event's type. */
 export interface EventLogEntry {
-  event: Evidence;
+  event: GameEvent;
   uiPhaseBefore: UiPhase;
 }
 
 export interface GameSession {
   schemaVersion: number;
   engineVersion: EngineVersion;
-  predictorVersion: PredictorVersion;
   createdAt: string;
   updatedAt: string;
 
   config: GameConfig;
   myPlayerNumber: PlayerId;
-  /** Set once after setup via setPlayerRole(); never surfaced on the normal game screen (see gameFacade.ts's getPublicPlayerProbabilities). */
+  /** Set once after setup via setPlayerRole(); never surfaced on the normal game screen. */
   myRole: RoleId | null;
 
   eventLog: EventLogEntry[];
   uiPhase: UiPhase;
   votingDraft: VotingDraft | null;
+  /**
+   * The UiPhase active immediately before finishGame() was called - lets
+   * resumeGame() return to a genuinely live game instead of being a dead
+   * end (see this redesign's "Finish Game must always be resumable" goal).
+   * Meaningless while uiPhase.kind !== "finished".
+   */
+  phaseBeforeFinish: UiPhase | null;
 
   finalRoles: Partial<Record<PlayerId, RoleId>> | null;
   confirmedOutcome: "townWon" | "mafiaWon" | "unknown" | null;
@@ -133,7 +132,7 @@ export interface AppState {
   history: HistoryGameEntry[];
 }
 
-/** MENU vs GAME is derived, never stored redundantly (see this milestone's own persistence guidance: one authoritative representation). */
+/** MENU vs GAME is derived, never stored redundantly. */
 export function getAppScreen(state: AppState): "MENU" | "GAME" {
   return state.currentGame ? "GAME" : "MENU";
 }

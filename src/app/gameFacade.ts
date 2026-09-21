@@ -1,23 +1,25 @@
-import { AliveState, GameConfig, PlayerId, RoleExpression, RoleId, World } from "../types";
-import { Evidence } from "../evidence";
+import { ActionIntensity, AliveState, GameConfig, GameEvent, PlayerId, RoleExpression, RoleId } from "../types";
 import { InvestigationMechanic } from "../investigation";
 import { defaultRoleRegistry, validateGameConfig } from "../roles";
-import { defaultGroupRegistry } from "../roleGroups";
-import { generateWorlds } from "../generateWorlds";
-import { GameSetting, processEvidence } from "../processEvidence";
-import { createBehavioralLikelihoodModel, defaultBehavioralModelParams } from "../behavioralModel";
-import { describeEvidence } from "../gameEvaluation";
-import { getPossibleWorlds } from "../gameOutcome";
 import { initAliveState, markDead } from "../facts";
-import { CandidateTally, CandidateVoteOutcome, KeepOrEliminateOutcome, resolveCandidateVote, resolveKeepOrEliminateVote, tallyCandidateVote } from "../voting";
-import { getExpressionProbability, getProbability } from "../probability";
-import { getTeammateProbabilities } from "./teamAlignment";
+import {
+  CandidateTally,
+  CandidateVoteOutcome,
+  KeepOrEliminateOutcome,
+  resolveCandidateVote,
+  resolveKeepOrEliminateVote,
+  tallyCandidateVote,
+} from "../voting";
+import { validateDayElimination } from "../dayEliminationValidation";
+import { describeGameEvent } from "../describeGameEvent";
+import { AffinityMatrix, affinityBetween, computeAffinityMatrix } from "../relations/affinity";
+import { detectTeams } from "../relations/clustering";
+import { ConfirmedTeam, deriveConfirmedTeams } from "../relations/confirmedFacts";
 import {
   APP_SCHEMA_VERSION,
   AppState,
   CandidateVoteDraft,
   CURRENT_ENGINE_VERSION,
-  CURRENT_PREDICTOR_VERSION,
   EventLogEntry,
   GameSession,
   GameSetupInput,
@@ -30,20 +32,18 @@ import {
 import { StorageAdapter, loadAppState, saveAppState } from "./storage";
 
 /**
- * The facade/application-state layer between a future UI and the existing
- * Bayesian engine (see this milestone's own architecture report for the
- * full rationale). A UI built on top of this file never imports
- * evidence.ts/behavioralModel.ts/generateWorlds.ts/processEvidence.ts/
- * updateProbabilities.ts directly - every predictor-facing question goes
- * through a method here, which reuses those files completely unchanged.
+ * The facade/application-state layer between the UI and the relationship
+ * engine (see src/relations/ and this redesign's own notes). A UI built on
+ * top of this file never imports relations/affinity.ts, relations/
+ * clustering.ts, or relations/confirmedFacts.ts directly - every
+ * relationship-facing question goes through a method here.
  *
- * `session.eventLog` (an ordered Evidence[] plus, per entry, the UiPhase
+ * `session.eventLog` (an ordered GameEvent[] plus, per entry, the UiPhase
  * active immediately before it) is the ONE authoritative source of truth.
- * The posterior (World[]) is NEVER persisted - it is always recomputed from
- * `eventLog` via computeSteps(), exactly the same processEvidence() call a
- * fresh replay of a finished game already uses elsewhere in this project.
- * This makes an engine/predictor upgrade automatically apply to old saved
- * games on next load (no silently-stale cached posterior), and makes undo
+ * The relationship graph is NEVER persisted - it is always recomputed from
+ * `eventLog`, cheaply (see relations/affinity.ts's own complexity note),
+ * every time it's asked for. This is what makes an engine upgrade
+ * automatically apply to old saved games on next load, and what makes undo
  * exactly "drop the last event, recompute" (see undoLastEvent()).
  */
 
@@ -61,24 +61,44 @@ export interface PublicSessionView {
   createdAt: string;
   updatedAt: string;
   engineVersion: string;
-  predictorVersion: string;
 }
 
-export interface PublicPlayerProbability {
+/** One suspect/nominate ("attack") or defend ("support") action, for the UI to draw as an arrow. Every individual action gets its own arrow - never aggregated (see this redesign's own notes on why). */
+export interface RelationshipArrow {
+  id: string;
+  type: "attack" | "support";
+  eventType: "suspect" | "nominate" | "defend";
+  actor: PlayerId;
+  target: PlayerId;
+  round: number;
+}
+
+export interface DetectedTeam {
+  members: PlayerId[];
+}
+
+export interface RelationshipView {
+  arrows: RelationshipArrow[];
+  teams: DetectedTeam[];
+  confirmedTeams: Partial<Record<PlayerId, ConfirmedTeam>>;
+}
+
+export interface PlayerRelationshipScore {
+  other: PlayerId;
+  /** Positive = net cooperation signal, negative = net opposition, 0 = no signal yet. */
+  score: number;
+}
+
+export interface PlayerInfo {
   player: PlayerId;
   alive: boolean;
-  mafiaProbability: number;
-  commissionerProbability: number;
-  doctorProbability: number;
-  donProbability?: number;
+  confirmedTeam?: ConfirmedTeam;
+  /** Every other player with a nonzero score, strongest relationship (either direction) first. */
+  relationships: PlayerRelationshipScore[];
+  events: { event: GameEvent; description: string }[];
 }
 
-export interface PlayerInfo extends PublicPlayerProbability {
-  teammateProbabilities: Record<PlayerId, number>;
-  events: { event: Evidence; description: string }[];
-}
-
-function eventInvolvesPlayer(event: Evidence, player: PlayerId): boolean {
+function eventInvolvesPlayer(event: GameEvent, player: PlayerId): boolean {
   switch (event.type) {
     case "selfRoleClaim":
       return event.actor === player;
@@ -89,10 +109,7 @@ function eventInvolvesPlayer(event: Evidence, player: PlayerId): boolean {
     case "nominate":
       return event.actor === player || event.target === player;
     case "candidateVote":
-      return (
-        event.candidates.includes(player) ||
-        Object.values(event.handsRaised).some((voters) => (voters ?? []).includes(player))
-      );
+      return event.candidates.includes(player) || Object.values(event.handsRaised).some((voters) => (voters ?? []).includes(player));
     case "keepOrEliminateVote":
       return event.candidates.includes(player) || event.eliminateHands.includes(player);
     case "nightResult":
@@ -136,50 +153,62 @@ export class MafiaPredictorFacade {
     return session.uiPhase.round;
   }
 
-  private setting(config: GameConfig): GameSetting {
-    return { config, roles: defaultRoleRegistry, groups: defaultGroupRegistry };
+  /** The current day's round number, valid from any of this day's decision-making sub-phases ("day" itself, an in-progress candidateVote, or an in-progress keepOrEliminateVote). */
+  private requireDayRound2(session: GameSession): number {
+    if (session.uiPhase.kind === "day" || session.uiPhase.kind === "voting" || session.uiPhase.kind === "keepOrEliminateVoting") {
+      return session.uiPhase.round;
+    }
+    throw new GameFacadeError(`this action requires the "day", "voting", or "keepOrEliminateVoting" phase, current phase is "${session.uiPhase.kind}"`);
   }
 
-  /** The ONE place a LikelihoodModel is constructed - swap the params object here to change the predictor's behavioral assumptions; never inline elsewhere. */
-  private model() {
-    return createBehavioralLikelihoodModel(defaultBehavioralModelParams);
-  }
-
-  /**
-   * Recomputes the full posterior from `session.eventLog` - the single
-   * "replay" operation everything else in this class is built on. Throws
-   * exactly when processEvidence/updateProbabilities would (a malformed or
-   * mechanically-impossible event) - callers that are VALIDATING a
-   * not-yet-committed event call this on a candidate session BEFORE
-   * assigning it to `this.state`, so an invalid manual entry is rejected
-   * without corrupting the persisted log (see appendEvent).
-   */
-  private computeSteps(session: GameSession) {
-    const worlds = generateWorlds(session.config);
-    const events = session.eventLog.map((e) => e.event);
-    return processEvidence(worlds, events, this.model(), this.setting(session.config));
-  }
-
-  private currentWorlds(session: GameSession): World[] {
-    const steps = this.computeSteps(session);
-    return steps.length > 0 ? steps[steps.length - 1].posterior : generateWorlds(session.config);
-  }
-
-  /** Alive state after EVERY recorded event so far - independent of uiPhase, always "as of right now". */
+  /** Alive state after EVERY recorded event so far. Throws if the log is somehow inconsistent (a player dying twice) - defensive; appendEvent already validates before anything is committed. */
   private currentAliveState(session: GameSession): AliveState {
     let alive = initAliveState(session.config);
     session.eventLog.forEach(({ event }) => {
-      if (event.type === "nightResult") event.died.forEach((p) => (alive = markDead(alive, p)));
-      if (event.type === "dayElimination") event.eliminated.forEach((p) => (alive = markDead(alive, p)));
+      if (event.type === "nightResult") {
+        event.died.forEach((p) => {
+          if (alive[p] === false) throw new GameFacadeError(`player "${p}" died but was already dead`);
+          alive = markDead(alive, p);
+        });
+      }
+      if (event.type === "dayElimination") {
+        event.eliminated.forEach((p) => {
+          if (alive[p] === false) throw new GameFacadeError(`player "${p}" was eliminated but was already dead`);
+          alive = markDead(alive, p);
+        });
+      }
     });
     return alive;
   }
 
-  /** Appends `event`, validating it via a dry-run computeSteps() BEFORE committing - throws (and leaves `session` untouched) on an invalid event. */
-  private appendEvent(session: GameSession, event: Evidence): GameSession {
+  /**
+   * Appends `event`, validating it BEFORE committing - throws (and leaves
+   * `session` untouched) on an invalid event. Replaces the old Bayesian
+   * facade's "dry-run computeSteps()" validation with direct, deterministic
+   * checks: the actor (for a single-actor Observation) must be alive right
+   * now, a dayElimination must match its round's actual vote chain
+   * (validateDayElimination), and any death must not double-kill someone
+   * (currentAliveState's own guard).
+   */
+  private appendEvent(session: GameSession, event: GameEvent): GameSession {
+    if (event.type !== "candidateVote" && event.type !== "keepOrEliminateVote" && event.type !== "nightResult" && event.type !== "dayElimination") {
+      const alive = this.currentAliveState(session);
+      if (alive[event.actor] !== true) {
+        throw new GameFacadeError(`"${event.actor}" is dead and cannot produce a new action`);
+      }
+    }
+
     const entry: EventLogEntry = { event, uiPhaseBefore: session.uiPhase };
     const candidate: GameSession = { ...session, eventLog: [...session.eventLog, entry] };
-    this.computeSteps(candidate); // throws on an invalid/impossible event - candidate is discarded, nothing persisted
+
+    if (event.type === "dayElimination") {
+      const votesThisRound = candidate.eventLog
+        .map((e) => e.event)
+        .filter((e): e is Extract<GameEvent, { type: "candidateVote" | "keepOrEliminateVote" }> => e.type === "candidateVote" || e.type === "keepOrEliminateVote");
+      validateDayElimination(event, votesThisRound, this.currentAliveState(session));
+    }
+
+    this.currentAliveState(candidate); // throws on an inconsistent result (defensive re-check)
     return candidate;
   }
 
@@ -201,14 +230,7 @@ export class MafiaPredictorFacade {
     return getAppScreen(this.state);
   }
 
-  /**
-   * Everything about the current session a UI needs to render config/phase/
-   * history summaries, EXCLUDING `myRole`'s actual value (only whether it's
-   * been set) and any probability - the two things that must never reach
-   * the normal game screen. Deliberately one small, safe read model rather
-   * than exposing `GameSession` directly, so a future field added to
-   * GameSession can't accidentally leak through this getter unreviewed.
-   */
+  /** Everything about the current session a UI needs to render config/phase/history summaries, EXCLUDING `myRole`'s actual value (only whether it's been set). */
   getPublicSessionView(): PublicSessionView {
     const s = this.requireGame();
     return {
@@ -223,43 +245,19 @@ export class MafiaPredictorFacade {
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       engineVersion: s.engineVersion,
-      predictorVersion: s.predictorVersion,
     };
   }
 
-  /** Every distinct role in this game's configuration - for a role picker (e.g. the secret-role-entry screen). Order matches roles.ts's own key order, not config.roles' (possibly duplicated) order. */
+  /** Every distinct role in this game's configuration - for a role picker. */
   getRoleOptions(): RoleId[] {
     const s = this.requireGame();
     return Array.from(new Set(s.config.roles));
-  }
-
-  /**
-   * P(mafia team) before any evidence, for this game's role configuration -
-   * i.e. what every player's mafiaProbability equals at the very start.
-   * Reuses generateWorlds()/getExpressionProbability() exactly as
-   * getPublicPlayerProbabilities() does, just against a fresh no-evidence
-   * world set instead of the current one - no new inference. Every player
-   * is interchangeable before any evidence, so this is a single game-wide
-   * number, not per-player.
-   *
-   * Exists so a UI can anchor a "neutral" visual (e.g. a probability bar's
-   * center point) at the game's actual prior instead of a universal 0.5,
-   * which is wrong whenever the mafia team isn't exactly half the players -
-   * the normal case (e.g. 2 of 7 by this app's own default role policy).
-   */
-  getPriorMafiaProbability(): number {
-    const s = this.requireGame();
-    const worlds = generateWorlds(s.config);
-    return getExpressionProbability(worlds, s.config.players[0], { kind: "group", group: "mafia" }, defaultGroupRegistry);
   }
 
   createGame(setup: GameSetupInput): void {
     const config = buildGameConfig(setup.playerCount, setup.roleCounts);
     validateGameConfig(config, defaultRoleRegistry);
     if (config.players.length !== config.roles.length) {
-      // generateWorlds() would throw this same mismatch later, the first time anything needs the
-      // posterior (e.g. right after picking a role) - checking it here instead means an invalid
-      // config is rejected up front and never gets persisted as a session in the first place.
       throw new GameFacadeError(
         `role counts must add up to exactly the player count (got ${config.roles.length} roles for ${config.players.length} players)`
       );
@@ -271,7 +269,6 @@ export class MafiaPredictorFacade {
     const session: GameSession = {
       schemaVersion: APP_SCHEMA_VERSION,
       engineVersion: CURRENT_ENGINE_VERSION,
-      predictorVersion: CURRENT_PREDICTOR_VERSION,
       createdAt: now,
       updatedAt: now,
       config,
@@ -280,6 +277,7 @@ export class MafiaPredictorFacade {
       eventLog: [],
       uiPhase: { kind: "day", round: 0 },
       votingDraft: null,
+      phaseBeforeFinish: null,
       finalRoles: null,
       confirmedOutcome: null,
     };
@@ -313,13 +311,57 @@ export class MafiaPredictorFacade {
     return this.requireGame().uiPhase;
   }
 
+  /**
+   * True while the current phase was entered by a pure phase transition
+   * (startNight/startVoting/startKeepOrEliminateVote) that never appended
+   * an event - i.e. there is nothing for undoLastEvent() to undo, but the
+   * phase itself can still be backed out of accident-free via
+   * cancelCurrentSubPhase(). False for "day" (there is nothing to cancel
+   * back to) and "finished" (use resumeGame() instead).
+   */
+  canCancelCurrentPhase(): boolean {
+    return this.requireGame().uiPhase.kind !== "day" && this.requireGame().uiPhase.kind !== "finished";
+  }
+
+  /**
+   * Backs out of an accidentally-started night/vote/keep-or-eliminate vote,
+   * discarding any in-progress draft, WITHOUT recording anything - safe
+   * specifically because startNight()/startVoting()/startKeepOrEliminateVote()
+   * only ever change `uiPhase`, they never append an event (see each of
+   * their own docs), so there is nothing in the event log to undo. Reverts
+   * to exactly the phase that started this one:
+   *  - "night" -> the day it was started from
+   *  - "voting" (initial) -> that same day
+   *  - "voting" (revote) -> the tied initial vote (its event is still in
+   *    the log, so the UI's existing "noDraft"/getVoteRecoveryState()
+   *    handling picks it back up as "tied", offering the same next steps)
+   *  - "keepOrEliminateVoting" -> the tied revote, the same way
+   */
+  cancelCurrentSubPhase(): void {
+    const session = this.requireGame();
+    const phase = session.uiPhase;
+    let target: UiPhase;
+    if (phase.kind === "night") {
+      target = { kind: "day", round: phase.round - 1 };
+    } else if (phase.kind === "voting" && phase.stage === "initial") {
+      target = { kind: "day", round: phase.round };
+    } else if (phase.kind === "voting" && phase.stage === "revote") {
+      target = { kind: "voting", round: phase.round, stage: "initial", candidates: phase.candidates };
+    } else if (phase.kind === "keepOrEliminateVoting") {
+      target = { kind: "voting", round: phase.round, stage: "revote", candidates: phase.candidates };
+    } else {
+      throw new GameFacadeError(`cancelCurrentSubPhase() has nothing to cancel from the "${phase.kind}" phase`);
+    }
+    this.updateSession({ ...session, uiPhase: target, votingDraft: null });
+  }
+
   startNight(): void {
     const session = this.requireGame();
     const round = this.requireDayRound(session);
     this.updateSession({ ...session, uiPhase: { kind: "night", round: round + 1 } });
   }
 
-  /** Records this night's deaths (may be empty) and advances to the following day. Day 1 has no preceding night, so this is never called before it. */
+  /** Records this night's deaths (may be empty) and advances to the following day. */
   confirmNightDeaths(deadPlayers: PlayerId[]): void {
     const session = this.requireGame();
     if (session.uiPhase.kind !== "night") throw new GameFacadeError(`confirmNightDeaths() requires the "night" phase, current phase is "${session.uiPhase.kind}"`);
@@ -332,10 +374,11 @@ export class MafiaPredictorFacade {
   // Day actions (suspect/defend/nominate) and claims
   // ============================================================
 
-  recordAction(actor: PlayerId, type: "suspect" | "defend" | "nominate", target: PlayerId): void {
+  /** `intensity` (1-5 stars, defaults to 3) is how confidently the actor means this - see ActionIntensity's own doc and relations/affinity.ts's use of it. */
+  recordAction(actor: PlayerId, type: "suspect" | "defend" | "nominate", target: PlayerId, intensity?: ActionIntensity): void {
     const session = this.requireGame();
     const round = this.requireDayRound(session);
-    this.updateSession(this.appendEvent(session, { type, round, actor, target } as Evidence));
+    this.updateSession(this.appendEvent(session, { type, round, actor, target, intensity } as GameEvent));
   }
 
   recordSelfRoleClaim(actor: PlayerId, claim: RoleExpression): void {
@@ -360,7 +403,6 @@ export class MafiaPredictorFacade {
   // Voting
   // ============================================================
 
-  /** `stage: "initial"` starts fresh from the "day" phase; `stage: "revote"` continues from the "voting" phase a just-confirmed tied vote left the session in. */
   startVoting(stage: "initial" | "revote", candidates: PlayerId[]): void {
     const session = this.requireGame();
     const round = this.requireDayRound2(session);
@@ -377,25 +419,24 @@ export class MafiaPredictorFacade {
     this.updateSession({ ...session, votingDraft: { ...draft, handsRaised: { ...draft.handsRaised, [candidate]: [...voters] } } });
   }
 
-  /** Commits the in-progress candidateVote draft as a real event and returns the engine's own resolution (winner, or a tie needing a revote) - never invents a different voting model, reuses voting.ts's resolveCandidateVote unchanged. */
   confirmVote(): CandidateVoteOutcome {
     const session = this.requireGame();
     if (session.uiPhase.kind !== "voting") throw new GameFacadeError('confirmVote() requires the "voting" phase');
     const draft = this.requireVotingDraft(session, "candidateVote");
-    const event: Evidence = { type: "candidateVote", round: session.uiPhase.round, stage: session.uiPhase.stage, candidates: draft.candidates, handsRaised: draft.handsRaised };
+    const event: GameEvent = { type: "candidateVote", round: session.uiPhase.round, stage: session.uiPhase.stage, candidates: draft.candidates, handsRaised: draft.handsRaised };
     const withEvent = this.appendEvent(session, event);
     this.updateSession({ ...withEvent, votingDraft: null });
     const alive = this.currentAliveState(withEvent);
     return resolveCandidateVote(event as any, alive);
   }
 
-  /** Vote tally so far (including inferred abstention-to-last-candidate) for the in-progress draft - for a live "N votes" display before confirming. */
+  /** Vote tally so far (including inferred abstention-to-last-candidate) for the in-progress draft. */
   getVoteTallySoFar(): CandidateTally[] {
     const session = this.requireGame();
     if (session.uiPhase.kind !== "voting") throw new GameFacadeError('getVoteTallySoFar() requires the "voting" phase');
     const draft = this.requireVotingDraft(session, "candidateVote");
     const alive = this.currentAliveState(session);
-    const provisional: Evidence = { type: "candidateVote", round: session.uiPhase.round, stage: session.uiPhase.stage, candidates: draft.candidates, handsRaised: draft.handsRaised };
+    const provisional: GameEvent = { type: "candidateVote", round: session.uiPhase.round, stage: session.uiPhase.stage, candidates: draft.candidates, handsRaised: draft.handsRaised };
     return tallyCandidateVote(provisional as any, alive).candidates;
   }
 
@@ -409,14 +450,6 @@ export class MafiaPredictorFacade {
     });
   }
 
-  /** The current day's round number, valid from any of this day's decision-making sub-phases ("day" itself, an in-progress candidateVote, or an in-progress keepOrEliminateVote) - never from "night" or "finished". */
-  private requireDayRound2(session: GameSession): number {
-    if (session.uiPhase.kind === "day" || session.uiPhase.kind === "voting" || session.uiPhase.kind === "keepOrEliminateVoting") {
-      return session.uiPhase.round;
-    }
-    throw new GameFacadeError(`this action requires the "day", "voting", or "keepOrEliminateVoting" phase, current phase is "${session.uiPhase.kind}"`);
-  }
-
   recordEliminateHands(voters: PlayerId[]): void {
     const session = this.requireGame();
     const draft = this.requireVotingDraft(session, "keepOrEliminateVote");
@@ -427,14 +460,49 @@ export class MafiaPredictorFacade {
     const session = this.requireGame();
     if (session.uiPhase.kind !== "keepOrEliminateVoting") throw new GameFacadeError('confirmKeepOrEliminateVote() requires the "keepOrEliminateVoting" phase');
     const draft = this.requireVotingDraft(session, "keepOrEliminateVote");
-    const event: Evidence = { type: "keepOrEliminateVote", round: session.uiPhase.round, candidates: draft.candidates, eliminateHands: draft.eliminateHands };
+    const event: GameEvent = { type: "keepOrEliminateVote", round: session.uiPhase.round, candidates: draft.candidates, eliminateHands: draft.eliminateHands };
     const withEvent = this.appendEvent(session, event);
     this.updateSession({ ...withEvent, votingDraft: null });
     const alive = this.currentAliveState(withEvent);
     return resolveKeepOrEliminateVote(event as any, alive);
   }
 
-  /** Finalizes the day's elimination (possibly empty - "leave everyone") and returns to the "day" phase for the SAME round. */
+  /**
+   * When the "voting"/"keepOrEliminateVoting" phase has no in-progress
+   * draft (votingDraft === null) - either because the vote was just
+   * confirmed, or because Undo removed some later event - tells the UI
+   * what's safe to do next:
+   *  - "noRecordedVote": no vote event for this exact round+stage/kind
+   *    exists yet (a fresh phase, or Undo removed the vote event itself) -
+   *    starting a brand new vote here is safe.
+   *  - "tied": the last recorded vote for this round+stage already exists
+   *    and tied - the existing "move to revote/keep-or-eliminate" UI
+   *    applies, nothing to record yet.
+   *  - "decisive": the last recorded vote for this round already exists
+   *    and resolved decisively (a winner, or eliminateAll/keepAll) -
+   *    `eliminated` is what recordDayElimination() should be called with.
+   *    Starting a NEW vote here instead would append a second vote event
+   *    for the same round+stage, which dayEliminationValidation.ts then
+   *    correctly rejects as an illegal chain - this is how the UI avoids
+   *    ever offering that trap.
+   */
+  getVoteRecoveryState(): { kind: "noRecordedVote" } | { kind: "tied" } | { kind: "decisive"; eliminated: PlayerId[] } {
+    const session = this.requireGame();
+    const last = session.eventLog[session.eventLog.length - 1]?.event;
+    const alive = this.currentAliveState(session);
+
+    if (session.uiPhase.kind === "voting" && last?.type === "candidateVote" && last.round === session.uiPhase.round && last.stage === session.uiPhase.stage) {
+      const outcome = resolveCandidateVote(last, alive);
+      return outcome.kind === "tie" ? { kind: "tied" } : { kind: "decisive", eliminated: [outcome.candidate] };
+    }
+    if (session.uiPhase.kind === "keepOrEliminateVoting" && last?.type === "keepOrEliminateVote" && last.round === session.uiPhase.round) {
+      const outcome = resolveKeepOrEliminateVote(last, alive);
+      return { kind: "decisive", eliminated: outcome.kind === "eliminateAll" ? [...outcome.candidates] : [] };
+    }
+    return { kind: "noRecordedVote" };
+  }
+
+  /** Finalizes the day's elimination (possibly empty) and returns to the "day" phase for the SAME round. */
   recordDayElimination(eliminated: PlayerId[]): void {
     const session = this.requireGame();
     const round = this.requireDayRound2(session);
@@ -443,24 +511,31 @@ export class MafiaPredictorFacade {
   }
 
   // ============================================================
-  // Finish game
+  // Finish game - fully manual, always resumable (see this redesign's own
+  // notes: there is no more world-tracking to auto-suggest a winner from,
+  // and the old auto-suggestion was itself a source of real bugs).
   // ============================================================
-
-  /** "unknown" unless the CURRENT posterior's nonzero worlds are unanimous - see gameOutcome.ts's getPossibleWorlds (unchanged): a live, incomplete-information game can only be called with certainty when every remaining possible world agrees. */
-  getSuggestedOutcome(): "townWon" | "mafiaWon" | "unknown" {
-    const session = this.requireGame();
-    const worlds = this.currentWorlds(session);
-    const alive = this.currentAliveState(session);
-    const possible = getPossibleWorlds(worlds, alive, defaultRoleRegistry);
-    if (possible.ongoing.length > 0) return "unknown";
-    if (possible.townWon.length > 0 && possible.mafiaWon.length === 0) return "townWon";
-    if (possible.mafiaWon.length > 0 && possible.townWon.length === 0) return "mafiaWon";
-    return "unknown";
-  }
 
   finishGame(confirmedOutcome: "townWon" | "mafiaWon" | "unknown"): void {
     const session = this.requireGame();
-    this.updateSession({ ...session, uiPhase: { kind: "finished" }, confirmedOutcome });
+    const phaseBeforeFinish = session.uiPhase.kind === "finished" ? session.phaseBeforeFinish : session.uiPhase;
+    // Default every player's final role to "citizen" (the most common role,
+    // and a far less misleading blank-state than an arbitrary role) the
+    // FIRST time the game finishes - never overwrites roles already entered
+    // on an earlier finish. The viewer's own seat defaults to their actual
+    // known role instead, since that one is never actually in doubt.
+    const finalRoles =
+      session.finalRoles ??
+      Object.fromEntries(session.config.players.map((p) => [p, p === session.myPlayerNumber && session.myRole ? session.myRole : "citizen"]));
+    this.updateSession({ ...session, uiPhase: { kind: "finished" }, phaseBeforeFinish, confirmedOutcome, finalRoles });
+  }
+
+  /** Returns to the live game exactly where Finish Game was called from - Finish Game must never be a dead end. */
+  resumeGame(): void {
+    const session = this.requireGame();
+    if (session.uiPhase.kind !== "finished") throw new GameFacadeError("resumeGame() requires the \"finished\" phase");
+    if (!session.phaseBeforeFinish) throw new GameFacadeError("no phase to resume to");
+    this.updateSession({ ...session, uiPhase: session.phaseBeforeFinish, phaseBeforeFinish: null });
   }
 
   setFinalRole(player: PlayerId, role: RoleId): void {
@@ -475,21 +550,18 @@ export class MafiaPredictorFacade {
 
   /**
    * Undoes the most recently CONFIRMED event: drops it from eventLog and
-   * restores uiPhase to exactly what it was immediately before that event
-   * (stored per-entry - see EventLogEntry). Safe by construction: undo only
-   * ever removes the LAST event, and nothing later in the log can depend on
-   * it (there is nothing later), so the remaining prefix is always a valid
-   * history - re-validated via computeSteps() as a defensive check anyway.
-   * Does NOT touch myRole/finalRoles/confirmedOutcome/votingDraft - those
-   * are simple idempotent setters a caller corrects by calling them again,
-   * not part of the sequential eventLog this method operates on.
+   * restores uiPhase to exactly what it was immediately before that event.
+   * Safe by construction: undo only ever removes the LAST event, and
+   * nothing later in the log can depend on it. Does NOT touch myRole/
+   * finalRoles/confirmedOutcome/votingDraft - those are simple idempotent
+   * setters a caller corrects by calling them again.
    */
   undoLastEvent(): void {
     const session = this.requireGame();
     if (session.eventLog.length === 0) throw new GameFacadeError("no events to undo");
     const last = session.eventLog[session.eventLog.length - 1];
     const candidate: GameSession = { ...session, eventLog: session.eventLog.slice(0, -1), uiPhase: last.uiPhaseBefore, votingDraft: null };
-    this.computeSteps(candidate); // defensive re-validation - should never throw for a removed tail event
+    this.currentAliveState(candidate); // defensive re-validation - should never throw for a removed tail event
     this.updateSession(candidate);
   }
 
@@ -499,48 +571,69 @@ export class MafiaPredictorFacade {
   }
 
   // ============================================================
-  // Read-only predictor views
+  // Read-only relationship views
   // ============================================================
 
-  getEventLog(): { event: Evidence; description: string }[] {
-    return this.requireGame().eventLog.map(({ event }) => ({ event, description: describeEvidence(event) }));
+  getEventLog(): { event: GameEvent; description: string }[] {
+    return this.requireGame().eventLog.map(({ event }) => ({ event, description: describeGameEvent(event) }));
   }
 
-  /** Every living player's probabilities, EXCLUDING myPlayerNumber entirely - not merely "the UI shouldn't call this for self", but structurally omitted, per this milestone's "hard to accidentally expose" requirement. */
-  getPublicPlayerProbabilities(): PublicPlayerProbability[] {
+  private affinityMatrix(session: GameSession): AffinityMatrix {
+    return computeAffinityMatrix(session.config.players, session.eventLog.map((e) => e.event));
+  }
+
+  /**
+   * Arrows (one per individual suspect/nominate/defend action - see
+   * RelationshipArrow's own doc), detected teams (dynamic clustering, see
+   * relations/clustering.ts), and confirmed team facts (see relations/
+   * confirmedFacts.ts) - the UI's single entry point for everything the
+   * player circle and team panel need. EXCLUDES the viewer's own player
+   * from `confirmedTeams`/team membership is not filtered here (the UI
+   * decides how to render its own seat), but confirmedTeams never includes
+   * information the viewer doesn't already know some other way (it is
+   * derived only from the viewer's OWN recorded investigation reports).
+   */
+  getRelationshipView(): RelationshipView {
     const session = this.requireGame();
-    const worlds = this.currentWorlds(session);
-    const alive = this.currentAliveState(session);
-    const hasDon = session.config.roles.includes("don");
-    return session.config.players
-      .filter((p) => p !== session.myPlayerNumber)
-      .map((player) => ({
-        player,
-        alive: alive[player] === true,
-        mafiaProbability: getExpressionProbability(worlds, player, { kind: "group", group: "mafia" }, defaultGroupRegistry),
-        commissionerProbability: getProbability(worlds, player, "commissioner"),
-        doctorProbability: getProbability(worlds, player, "doctor"),
-        ...(hasDon ? { donProbability: getProbability(worlds, player, "don") } : {}),
-      }));
+    const events = session.eventLog.map((e) => e.event);
+
+    const arrows: RelationshipArrow[] = [];
+    events.forEach((event, i) => {
+      if (event.type === "suspect" || event.type === "nominate") {
+        arrows.push({ id: `${i}`, type: "attack", eventType: event.type, actor: event.actor, target: event.target, round: event.round });
+      } else if (event.type === "defend") {
+        arrows.push({ id: `${i}`, type: "support", eventType: "defend", actor: event.actor, target: event.target, round: event.round });
+      }
+    });
+
+    const matrix = this.affinityMatrix(session);
+    const teams = detectTeams(session.config.players, matrix).map((members) => ({ members }));
+    const confirmedTeams = deriveConfirmedTeams(events, session.myPlayerNumber, session.myRole, defaultRoleRegistry);
+
+    return { arrows, teams, confirmedTeams };
   }
 
-  /** Throws for myPlayerNumber - the caller must never route its own player through the shared "player info" screen (see this milestone's report). */
+  /** Throws for myPlayerNumber - the caller must never route its own player through the shared "player info" screen. */
   getPlayerInfo(player: PlayerId): PlayerInfo {
     const session = this.requireGame();
     if (player === session.myPlayerNumber) throw new GameFacadeError("cannot expose your own player info");
-    const worlds = this.currentWorlds(session);
     const alive = this.currentAliveState(session);
-    const hasDon = session.config.roles.includes("don");
     const events = session.eventLog.map((e) => e.event).filter((e) => eventInvolvesPlayer(e, player));
+    const matrix = this.affinityMatrix(session);
+    const confirmedTeams = deriveConfirmedTeams(session.eventLog.map((e) => e.event), session.myPlayerNumber, session.myRole, defaultRoleRegistry);
+
+    const relationships: PlayerRelationshipScore[] = session.config.players
+      .filter((p) => p !== player && p !== session.myPlayerNumber)
+      .map((other) => ({ other, score: affinityBetween(matrix, player, other) }))
+      .filter((r) => r.score !== 0)
+      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
+
     return {
       player,
       alive: alive[player] === true,
-      mafiaProbability: getExpressionProbability(worlds, player, { kind: "group", group: "mafia" }, defaultGroupRegistry),
-      commissionerProbability: getProbability(worlds, player, "commissioner"),
-      doctorProbability: getProbability(worlds, player, "doctor"),
-      ...(hasDon ? { donProbability: getProbability(worlds, player, "don") } : {}),
-      teammateProbabilities: getTeammateProbabilities(worlds, player, session.config.players, defaultRoleRegistry),
-      events: events.map((event) => ({ event, description: describeEvidence(event) })),
+      confirmedTeam: confirmedTeams[player],
+      relationships,
+      events: events.map((event) => ({ event, description: describeGameEvent(event) })),
     };
   }
 
@@ -566,7 +659,7 @@ export class MafiaPredictorFacade {
     return JSON.stringify(this.state.history, null, 2);
   }
 
-  /** Wipes ALL persisted application state (menu + any in-progress game + history) - the "Clear All Data" menu action. Reloading the page after this is the caller's (UI's) responsibility. */
+  /** Wipes ALL persisted application state (menu + any in-progress game + history). Reloading the page after this is the caller's (UI's) responsibility. */
   clearAllData(): void {
     this.state = { schemaVersion: APP_SCHEMA_VERSION, appVersion: this.state.appVersion, currentGame: null, history: [] };
     this.persist();

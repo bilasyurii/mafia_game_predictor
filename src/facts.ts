@@ -2,10 +2,10 @@ import {
   AliveState,
   CandidateVote,
   GameConfig,
+  GameEvent,
   KeepOrEliminateVote,
   PlayerId,
 } from "./types";
-import type { Evidence } from "./evidence";
 
 export function initAliveState(config: GameConfig): AliveState {
   const state: AliveState = {};
@@ -35,19 +35,6 @@ export function assertAlive(state: AliveState, player: PlayerId): void {
   if (!isAlive(state, player)) {
     throw new Error(`${player} is dead and cannot produce new observations`);
   }
-}
-
-/**
- * The moderator's public announcement of who left the table at the end of
- * day `round` - identity only, never role. Empty when nobody was eliminated
- * (e.g. the tied candidates were kept). Which vote produced it is not
- * repeated here; see voting.ts for those rules.
- */
-export interface DayEliminationFact {
-  type: "dayElimination";
-  /** Same numbering as the day's votes: day N follows night N. */
-  round: number;
-  eliminated: PlayerId[];
 }
 
 /**
@@ -84,7 +71,7 @@ function assertValidPhase({ phase, round }: GamePhase): void {
  * Throws on an invalid round, or on an InvestigationReport whose explicit
  * `night` is not an integer between 1 and the day it was reported on.
  */
-export function getPhaseOf(evidence: Evidence): GamePhase {
+export function getPhaseOf(evidence: GameEvent): GamePhase {
   const phase: GamePhase =
     evidence.type === "nightResult"
       ? { phase: "night", round: evidence.round }
@@ -114,7 +101,7 @@ export function getPhaseOf(evidence: Evidence): GamePhase {
  */
 export function getAliveStateAt(
   config: GameConfig,
-  history: readonly Evidence[],
+  history: readonly GameEvent[],
   at: GamePhase
 ): AliveState {
   assertValidPhase(at);
@@ -156,7 +143,7 @@ export function getAliveStateAt(
 /** The alive state every vote of day `vote.round` was cast under. */
 export function getAliveStateForVote(
   config: GameConfig,
-  history: readonly Evidence[],
+  history: readonly GameEvent[],
   vote: CandidateVote | KeepOrEliminateVote
 ): AliveState {
   return getAliveStateAt(config, history, { phase: "day", round: vote.round });
@@ -170,10 +157,10 @@ export function getAliveStateForVote(
  * change the result, so this is safe to call with a history that extends
  * past `evidence`.
  */
-export function getAliveStateForEvidence(
+export function getAliveStateForGameEvent(
   config: GameConfig,
-  history: readonly Evidence[],
-  evidence: Evidence
+  history: readonly GameEvent[],
+  evidence: GameEvent
 ): AliveState {
   return getAliveStateAt(config, history, getPhaseOf(evidence));
 }
@@ -193,9 +180,9 @@ export function getAliveStateForEvidence(
  * later day or night before an earlier one.
  */
 export function getHistoryBefore(
-  history: readonly Evidence[],
+  history: readonly GameEvent[],
   index: number
-): Evidence[] {
+): GameEvent[] {
   if (!Number.isInteger(index) || index < 0 || index >= history.length) {
     throw new Error(`history index ${index} is out of range`);
   }

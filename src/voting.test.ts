@@ -7,7 +7,6 @@ import {
   KeepOrEliminateVote,
   PlayerId,
   RoleId,
-  World,
 } from "./types";
 import {
   resolveCandidateVote,
@@ -18,11 +17,6 @@ import {
   validateKeepOrEliminateVote,
 } from "./voting";
 import { initAliveState, markDead } from "./facts";
-import { generateWorlds } from "./generateWorlds";
-import { createLikelihoodModel, EvidenceContext } from "./evidence";
-import { createHandlers } from "./likelihoodHandlers";
-import { defaultRoleRegistry } from "./roles";
-import { defaultGroupRegistry } from "./roleGroups";
 
 const game: GameConfig = {
   players: ["1", "2", "3", "4", "5", "6", "7", "8"],
@@ -288,23 +282,4 @@ test("voting helpers never mutate the observation or the alive state", () => {
 
   assert.equal(JSON.stringify([cv, kv, alive]), snapshot);
   assert.equal(cv.handsRaised["2"], undefined); // abstentions were not written back
-});
-
-test("vote likelihoods stay uncalibrated in every world - no coefficient is returned", () => {
-  const model = createLikelihoodModel(createHandlers({ truthful: 0.5, false: 0.5 }));
-  const ctx: EvidenceContext = {
-    config: game,
-    roles: defaultRoleRegistry,
-    groups: defaultGroupRegistry,
-    alive: aliveAll,
-    history: [],
-  };
-  const worlds: World[] = generateWorlds(game).slice(0, 50);
-  const cv = candidateVote(["1", "2"], { "1": ["3", "4"] });
-  const kv = keepOrEliminate(["1", "2"], ["3"]);
-
-  worlds.forEach((world) => {
-    assert.throws(() => model.likelihood(cv, world, ctx), /candidateVote likelihood not calibrated yet/);
-    assert.throws(() => model.likelihood(kv, world, ctx), /keepOrEliminateVote likelihood not calibrated yet/);
-  });
 });
