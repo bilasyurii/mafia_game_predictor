@@ -6,12 +6,20 @@
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/index.ts",
-    "test": "node --require ts-node/register --test \"src/**/*.test.ts\""
+    "test": "node --require ts-node/register --test \"src/**/*.test.ts\"",
+    "typecheck:web": "tsc --noEmit -p web/tsconfig.json",
+    "build:web": "esbuild web/src/app.ts --bundle --outfile=web/dist/bundle.js --format=iife",
+    "test:web": "TS_NODE_PROJECT=web/tsconfig.json node --require ts-node/register --test \"web/src/**/*.test.ts\"",
+    "playtest": "npm run build:web && node web/scripts/playtest.js",
+    "playtest2": "npm run build:web && node web/scripts/playtest2.js",
+    "playtest3": "npm run build:web && node web/scripts/playtest3.js"
   },
   "author": "Yurii Bilas",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }

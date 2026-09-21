@@ -35,6 +35,15 @@ test("defaultRoleCountsForPlayerCount: 9+ players get 2 mafia, <=8 get 1 mafia, 
   assert.equal(nine.citizen, 4);
 });
 
+test("REGRESSION (found via browser playtest): createGame rejects role counts that don't sum to the player count, BEFORE persisting a session - previously this was only caught later by generateWorlds(), by which point an unrenderable session was already saved, crashing the UI to a blank screen with no recovery", () => {
+  const { facade } = newFacade();
+  assert.throws(
+    () => facade.createGame({ playerCount: 7, myPlayerNumber: "1", roleCounts: { ...defaultRoleCountsForPlayerCount(7), citizen: 10 } }),
+    GameFacadeError
+  );
+  assert.equal(facade.getAppScreen(), "MENU", "a rejected createGame() must not leave a broken session behind");
+});
+
 test("createGame builds a valid session; recordAction/recordSelfRoleClaim actually move the predictor's posterior", () => {
   const { facade } = newFacade();
   setupSevenPlayerGame(facade);
@@ -235,6 +244,43 @@ test("final roles can be recorded per player, and finishGame stores a confirmed 
   const state = loadAppState(storage);
   assert.deepEqual(state.currentGame!.finalRoles, { "1": "citizen", "2": "mafia" });
   assert.equal(state.currentGame!.confirmedOutcome, "townWon");
+});
+
+test("finishGame can be called again to override a previously confirmed outcome (e.g. correcting an auto-suggested 'unknown'), and the override survives into history", () => {
+  const { facade } = newFacade();
+  setupSevenPlayerGame(facade);
+  assert.equal(facade.getSuggestedOutcome(), "unknown"); // nothing has happened yet - engine can't determine a winner
+
+  facade.finishGame(facade.getSuggestedOutcome()); // what the UI does immediately on "Finish Game"
+  assert.equal(facade.getPublicSessionView().confirmedOutcome, "unknown");
+
+  facade.finishGame("mafiaWon"); // the user explicitly picks a winner instead
+  assert.equal(facade.getPublicSessionView().confirmedOutcome, "mafiaWon");
+
+  facade.saveGameToHistory();
+  const [entry] = facade.listHistory();
+  assert.equal(entry.session.confirmedOutcome, "mafiaWon");
+});
+
+test("getPlayerInfo works for a dead (non-self) player - dead players remain inspectable, only the caller's own player is refused", () => {
+  const { facade } = newFacade();
+  setupSevenPlayerGame(facade);
+  facade.startNight();
+  facade.confirmNightDeaths(["3"]);
+
+  const info = facade.getPlayerInfo("3");
+  assert.equal(info.alive, false);
+  assert.equal(typeof info.mafiaProbability, "number");
+  assert.ok(info.teammateProbabilities);
+});
+
+test("getPriorMafiaProbability matches the game's actual role-count prior (mafia-team roles / total players), and is unaffected by evidence", () => {
+  const { facade } = newFacade();
+  setupSevenPlayerGame(facade); // 7 players, default roles: 1 don + 1 mafia = 2 mafia-team of 7
+  assert.ok(Math.abs(facade.getPriorMafiaProbability() - 2 / 7) < 1e-9);
+
+  facade.recordAction("2", "suspect", "3"); // evidence recorded - prior must still reflect only role counts
+  assert.ok(Math.abs(facade.getPriorMafiaProbability() - 2 / 7) < 1e-9);
 });
 
 test("historical games serialize and round-trip through export/import (JSON) without loss", () => {

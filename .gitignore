@@ -1,2 +1,5 @@
 node_modules
 .env.local
+web/dist
+web/*.zip
+.DS_Store

@@ -1,0 +1,401 @@
+:root {
+  --bg: #111417;
+  --panel: #1c2126;
+  --panel-2: #262d34;
+  --text: #f0f2f4;
+  --muted: #9aa4ad;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --town: #22c55e;
+  --mafia: #ef4444;
+  --border: #333b42;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  min-height: 100vh;
+  padding: 12px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.title {
+  font-size: 1.6rem;
+  margin: 8px 0;
+  text-align: center;
+}
+
+.subtitle {
+  font-size: 1.1rem;
+  margin: 4px 0;
+  color: var(--muted);
+}
+
+.hint {
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+}
+
+.error-banner {
+  background: var(--danger);
+  color: white;
+  padding: 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ---- buttons ---- */
+
+.btn {
+  font-size: 1rem;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  min-height: 48px;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn:disabled:active {
+  transform: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 700;
+}
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+  font-weight: 700;
+}
+
+.btn-huge {
+  font-size: 1.3rem;
+  padding: 22px;
+  width: 100%;
+}
+
+.btn-undo {
+  background: #b45309;
+  border-color: #b45309;
+  color: white;
+  font-weight: 700;
+}
+
+.btn-back-menu {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 10px 14px;
+  min-height: 40px;
+  flex-shrink: 0;
+}
+
+.actions-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.actions-wrap {
+  justify-content: center;
+}
+
+/* ---- menu ---- */
+
+.menu-screen {
+  align-items: stretch;
+  gap: 16px;
+  padding-top: 40px;
+}
+
+/* ---- forms ---- */
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.field-label {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.number-input,
+.select,
+.export-textarea {
+  font-size: 1rem;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 44px;
+}
+
+.number-input {
+  width: 90px;
+}
+
+.select {
+  flex: 1;
+  min-width: 140px;
+}
+
+/* ---- role entry ---- */
+
+.role-entry-screen {
+  align-items: center;
+  padding-top: 30px;
+}
+
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+
+.role-btn {
+  text-transform: capitalize;
+}
+
+/* ---- game screen ---- */
+
+.game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phase-label {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.player-circle {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 1 / 1;
+  margin: 10px auto;
+  border-radius: 50%;
+  border: 1px dashed var(--border);
+}
+
+.player-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 64px;
+  cursor: pointer;
+}
+
+.player-node-me {
+  cursor: default;
+}
+
+.player-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.player-node-dead .player-icon {
+  opacity: 0.6;
+}
+
+.player-number {
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.you-label {
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.prob-bar {
+  position: relative;
+  width: 12px;
+  height: 44px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.prob-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+}
+
+.prob-bar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+}
+
+.prob-bar-fill.prob-bar-town {
+  background: var(--town);
+}
+
+.prob-bar-fill.prob-bar-mafia {
+  background: var(--mafia);
+}
+
+/* ---- selection grids (death entry, voting) ---- */
+
+.player-select-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 8px;
+}
+
+.player-select-btn {
+  min-height: 56px;
+  font-weight: 700;
+}
+
+.player-select-btn-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.candidate-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.tally-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+/* ---- modal ---- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 10;
+}
+
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  max-width: 480px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---- history ---- */
+
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.event-log {
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 6px 12px;
+}
+
+.export-textarea {
+  width: 100%;
+  min-height: 220px;
+  font-family: monospace;
+  font-size: 0.8rem;
+}

@@ -49,6 +49,21 @@ import { StorageAdapter, loadAppState, saveAppState } from "./storage";
 
 export class GameFacadeError extends Error {}
 
+export interface PublicSessionView {
+  config: GameConfig;
+  myPlayerNumber: PlayerId;
+  hasMyRole: boolean;
+  uiPhase: UiPhase;
+  votingDraft: GameSession["votingDraft"];
+  finalRoles: GameSession["finalRoles"];
+  confirmedOutcome: GameSession["confirmedOutcome"];
+  eventCount: number;
+  createdAt: string;
+  updatedAt: string;
+  engineVersion: string;
+  predictorVersion: string;
+}
+
 export interface PublicPlayerProbability {
   player: PlayerId;
   alive: boolean;
@@ -186,9 +201,69 @@ export class MafiaPredictorFacade {
     return getAppScreen(this.state);
   }
 
+  /**
+   * Everything about the current session a UI needs to render config/phase/
+   * history summaries, EXCLUDING `myRole`'s actual value (only whether it's
+   * been set) and any probability - the two things that must never reach
+   * the normal game screen. Deliberately one small, safe read model rather
+   * than exposing `GameSession` directly, so a future field added to
+   * GameSession can't accidentally leak through this getter unreviewed.
+   */
+  getPublicSessionView(): PublicSessionView {
+    const s = this.requireGame();
+    return {
+      config: s.config,
+      myPlayerNumber: s.myPlayerNumber,
+      hasMyRole: s.myRole !== null,
+      uiPhase: s.uiPhase,
+      votingDraft: s.votingDraft,
+      finalRoles: s.finalRoles,
+      confirmedOutcome: s.confirmedOutcome,
+      eventCount: s.eventLog.length,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      engineVersion: s.engineVersion,
+      predictorVersion: s.predictorVersion,
+    };
+  }
+
+  /** Every distinct role in this game's configuration - for a role picker (e.g. the secret-role-entry screen). Order matches roles.ts's own key order, not config.roles' (possibly duplicated) order. */
+  getRoleOptions(): RoleId[] {
+    const s = this.requireGame();
+    return Array.from(new Set(s.config.roles));
+  }
+
+  /**
+   * P(mafia team) before any evidence, for this game's role configuration -
+   * i.e. what every player's mafiaProbability equals at the very start.
+   * Reuses generateWorlds()/getExpressionProbability() exactly as
+   * getPublicPlayerProbabilities() does, just against a fresh no-evidence
+   * world set instead of the current one - no new inference. Every player
+   * is interchangeable before any evidence, so this is a single game-wide
+   * number, not per-player.
+   *
+   * Exists so a UI can anchor a "neutral" visual (e.g. a probability bar's
+   * center point) at the game's actual prior instead of a universal 0.5,
+   * which is wrong whenever the mafia team isn't exactly half the players -
+   * the normal case (e.g. 2 of 7 by this app's own default role policy).
+   */
+  getPriorMafiaProbability(): number {
+    const s = this.requireGame();
+    const worlds = generateWorlds(s.config);
+    return getExpressionProbability(worlds, s.config.players[0], { kind: "group", group: "mafia" }, defaultGroupRegistry);
+  }
+
   createGame(setup: GameSetupInput): void {
     const config = buildGameConfig(setup.playerCount, setup.roleCounts);
     validateGameConfig(config, defaultRoleRegistry);
+    if (config.players.length !== config.roles.length) {
+      // generateWorlds() would throw this same mismatch later, the first time anything needs the
+      // posterior (e.g. right after picking a role) - checking it here instead means an invalid
+      // config is rejected up front and never gets persisted as a session in the first place.
+      throw new GameFacadeError(
+        `role counts must add up to exactly the player count (got ${config.roles.length} roles for ${config.players.length} players)`
+      );
+    }
     if (!config.players.includes(setup.myPlayerNumber)) {
       throw new GameFacadeError(`myPlayerNumber "${setup.myPlayerNumber}" is not one of this game's players`);
     }
