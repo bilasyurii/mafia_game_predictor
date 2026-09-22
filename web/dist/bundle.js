@@ -287,14 +287,20 @@
       case "nominate":
         return `${event.actor} nominates ${event.target}${describeIntensity(event.intensity)}`;
       case "candidateVote":
-        return `vote (${event.stage}): candidates=[${event.candidates.join(",")}]`;
+        return `vote (${event.stage}): ${describeHandsRaised(event)}`;
       case "keepOrEliminateVote":
-        return `keep/eliminate vote: candidates=[${event.candidates.join(",")}]`;
+        return `keep/eliminate vote: candidates=[${event.candidates.join(",")}], voted to eliminate: ${describePlayerList(event.eliminateHands)}`;
       case "nightResult":
         return `night ${event.round}: died=[${event.died.join(",")}]`;
       case "dayElimination":
         return `day ${event.round} elimination: [${event.eliminated.join(",")}]`;
     }
+  }
+  function describePlayerList(players) {
+    return players.length > 0 ? players.join(", ") : "(nobody)";
+  }
+  function describeHandsRaised(vote) {
+    return vote.candidates.map((candidate) => `${candidate} <- ${describePlayerList(vote.handsRaised[candidate] ?? [])}`).join("; ");
   }
   function describeExpression(expr) {
     return expr.kind === "role" ? expr.role : `<${expr.group}>`;

@@ -320,6 +320,38 @@ async function main() {
       await page.waitForSelector('text=Day 2');
     });
 
+    await step(page, "REGRESSION: Action History records who voted against whom in the initial vote, revote, and keep/eliminate vote - not just the candidate list", async () => {
+      await btn(page, "Action History").click();
+      await page.waitForSelector('text="Action History"');
+      const log = await page.locator(".event-log").innerText();
+      assert.ok(
+        log.includes("vote (initial): 3 <- 1, 3, 5; 4 <- 4, 6, 7"),
+        `expected the initial vote entry to name who voted against each candidate, got: ${log}`
+      );
+      assert.ok(
+        log.includes("vote (revote): 3 <- 1, 3, 5; 4 <- 4, 6, 7"),
+        `expected the revote entry to name who voted against each candidate, got: ${log}`
+      );
+      assert.ok(
+        /keep\/eliminate vote: candidates=\[3,4\], voted to eliminate: 1, 3, 4, 5, 6, 7/.test(log),
+        `expected the keep/eliminate vote entry to name who voted to eliminate, got: ${log}`
+      );
+      await btn(page, "Close").click();
+      await page.waitForSelector(".game-screen");
+    });
+
+    await step(page, "REGRESSION: Player Info's per-player event list also shows who voted against whom, not just that a vote happened", async () => {
+      await tapPlayer(page, "3");
+      await page.waitForSelector(".modal-box:has-text('Events involving this player')");
+      const infoText = await page.locator(".modal-box").innerText();
+      assert.ok(
+        infoText.includes("vote (initial): 3 <- 1, 3, 5; 4 <- 4, 6, 7"),
+        `expected player 3's info modal to show the vote breakdown, got: ${infoText}`
+      );
+      await btn(page, "Close").click();
+      await page.waitForSelector(".game-screen");
+    });
+
     await step(page, "verify players 3 and 4 are now dead after eliminateAll", async () => {
       await tapPlayer(page, "3");
       await page.waitForSelector(".modal-box:has-text('Alive: no')");

@@ -1,4 +1,4 @@
-import { GameEvent, RoleExpression } from "./types";
+import { CandidateVote, GameEvent, PlayerId, RoleExpression } from "./types";
 
 /** Human-readable one-line description of a GameEvent, for the UI's action log / history. */
 export function describeGameEvent(event: GameEvent): string {
@@ -16,14 +16,25 @@ export function describeGameEvent(event: GameEvent): string {
     case "nominate":
       return `${event.actor} nominates ${event.target}${describeIntensity(event.intensity)}`;
     case "candidateVote":
-      return `vote (${event.stage}): candidates=[${event.candidates.join(",")}]`;
+      return `vote (${event.stage}): ${describeHandsRaised(event)}`;
     case "keepOrEliminateVote":
-      return `keep/eliminate vote: candidates=[${event.candidates.join(",")}]`;
+      return `keep/eliminate vote: candidates=[${event.candidates.join(",")}], voted to eliminate: ${describePlayerList(event.eliminateHands)}`;
     case "nightResult":
       return `night ${event.round}: died=[${event.died.join(",")}]`;
     case "dayElimination":
       return `day ${event.round} elimination: [${event.eliminated.join(",")}]`;
   }
+}
+
+function describePlayerList(players: PlayerId[]): string {
+  return players.length > 0 ? players.join(", ") : "(nobody)";
+}
+
+/** Per-candidate breakdown of who voted against whom, e.g. "A <- X, Y; B <- (nobody)". */
+function describeHandsRaised(vote: CandidateVote): string {
+  return vote.candidates
+    .map((candidate) => `${candidate} <- ${describePlayerList(vote.handsRaised[candidate] ?? [])}`)
+    .join("; ");
 }
 
 function describeExpression(expr: RoleExpression): string {
