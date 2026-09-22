@@ -10,7 +10,8 @@
     "typecheck:web": "tsc --noEmit -p web/tsconfig.json",
     "build:web": "esbuild web/src/app.ts --bundle --outfile=web/dist/bundle.js --format=iife",
     "test:web": "TS_NODE_PROJECT=web/tsconfig.json node --require ts-node/register --test \"web/src/**/*.test.ts\"",
-    "playtest": "npm run build:web && node web/scripts/playtest.js"
+    "playtest": "npm run build:web && node web/scripts/playtest.js",
+    "deploy:web": "npm run build:web && node web/scripts/deploy.js"
   },
   "author": "Yurii Bilas",
   "license": "ISC",
