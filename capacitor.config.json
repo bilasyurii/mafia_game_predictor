@@ -1,0 +1,8 @@
+{
+  "appId": "com.yurii.mafiapredictor",
+  "appName": "Mafia Predictor",
+  "webDir": "web/www",
+  "android": {
+    "adjustMarginsForEdgeToEdge": "force"
+  }
+}

@@ -11,15 +11,23 @@
     "build:web": "esbuild web/src/app.ts --bundle --outfile=web/dist/bundle.js --format=iife",
     "test:web": "TS_NODE_PROJECT=web/tsconfig.json node --require ts-node/register --test \"web/src/**/*.test.ts\"",
     "playtest": "npm run build:web && node web/scripts/playtest.js",
-    "deploy:web": "npm run build:web && node web/scripts/deploy.js"
+    "deploy:web": "npm run build:web && node web/scripts/deploy.js",
+    "build:offline": "npm run build:web && node web/scripts/build-single-file.js",
+    "android:sync": "npm run build:offline && node web/scripts/prepare-app-www.js && cap sync android",
+    "android:build": "npm run android:sync && cd android && JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ./gradlew assembleDebug"
   },
   "author": "Yurii Bilas",
   "license": "ISC",
   "devDependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9",
     "@types/node": "^22.10.0",
     "esbuild": "^0.28.2",
     "playwright": "^1.63.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.6.9"
   }
 }

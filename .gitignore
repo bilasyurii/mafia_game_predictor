@@ -4,3 +4,5 @@ node_modules
 web/dist
 web/*.zip
 .DS_Store
+web/www
+android/local.properties
